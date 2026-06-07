@@ -846,7 +846,7 @@ async function runApiCycle() {
       const textMsg = `🚨 US Visa Slots Open (CheckVisaSlots API)!\n\n${citiesLines}\n\nChecked at: ${timeStr}`;
 
       triggerDesktopNotification("Visa Slots Open (API)!", `Locations: ${foundSlots.join(", ")}`);
-      sendTelegram(`🤖 <b>US Visa Slots Open (API Tracker)</b>\n\n${citiesLines}\n\n🕐 ${timeStr}\n👉 <a href="https://usvisascheduling.com">Book Now</a>`, config.telegramToken, config.telegramChatId);
+      sendTelegram(`🤖 <b>US Visa Slots Open (API Tracker)</b>\n\n${citiesLines}\n\n🕐 ${timeStr}\n👉 <a href="https://www.usvisascheduling.com/en-US/">Book Now</a>`, config.telegramToken, config.telegramChatId);
       sendEmail("US Visa Slots Open Alert (API)", textMsg, config);
     } else {
       logMsg("No slots detected in CheckVisaSlots data.");
