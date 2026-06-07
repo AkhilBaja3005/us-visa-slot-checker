@@ -28,7 +28,7 @@ let config = {
   emailSmtpPass: "",
   emailTo: "",
   applicantName: "",
-  checkIntervalSeconds: 300,
+  checkIntervalSeconds: 120,
   loginTimeoutSeconds: 600,
   checkVisaSlotsApiKey: "",
   ofcCities: [
@@ -93,7 +93,7 @@ function loadConfig() {
   if (process.env.PORTAL_USERNAME) config.portalUsername = process.env.PORTAL_USERNAME;
   if (process.env.PORTAL_PASSWORD) config.portalPassword = process.env.PORTAL_PASSWORD;
   if (process.env.APPLICANT_NAME) config.applicantName = process.env.APPLICANT_NAME;
-  if (process.env.CHECK_INTERVAL_SECONDS) config.checkIntervalSeconds = parseInt(process.env.CHECK_INTERVAL_SECONDS) || 120;
+  config.checkIntervalSeconds = parseInt(process.env.CHECK_INTERVAL_SECONDS) || config.checkIntervalSeconds || 120;
   if (process.env.OFC_CITIES) {
     config.ofcCities = process.env.OFC_CITIES.split(',').map(c => c.trim());
   }
