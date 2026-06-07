@@ -859,7 +859,44 @@ async function runApiCycle() {
 
 let schedulerIntervalId = null;
 let contributionIntervalId = null;
+let hourlySummaryIntervalId = null;
 let isChecking = false;
+
+// Track history over the last hour for cumulative notifications
+let hourlyChecksCount = 0;
+let hourlySuccessfulChecks = 0;
+let hourlyCreditsStart = null;
+let hourlyCreditsEnd = null;
+
+async function sendHourlySummary() {
+  if (hourlyChecksCount === 0) return;
+
+  const timeStr = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+  const creditsUsed = (hourlyCreditsStart !== null && hourlyCreditsEnd !== null) 
+    ? (hourlyCreditsStart - hourlyCreditsEnd) 
+    : 0;
+
+  // Compile current slot status overview
+  const citiesStatus = config.ofcCities.map(city => {
+    const hasSlots = monitorState.availableSlots[city];
+    const icon = hasSlots === true ? "✅" : hasSlots === false ? "❌" : "❓";
+    return `${icon} ${city.replace(" VAC", "")}: ${hasSlots === true ? "Slots Available" : hasSlots === false ? "No Slots" : "Pending"}`;
+  }).join("\n");
+
+  const message = `📊 <b>Hourly US Visa Monitor Report</b>\n\n` +
+                  `🕐 <b>Time:</b> ${timeStr} IST\n` +
+                  `🔄 <b>Successful Checks:</b> ${hourlySuccessfulChecks}/${hourlyChecksCount} cycles\n` +
+                  `💳 <b>Credits Remaining:</b> ${monitorState.apiCreditsRemaining || "N/A"} (${creditsUsed} used this hour)\n\n` +
+                  `<b>Consulate Status Overview:</b>\n${citiesStatus}`;
+
+  logMsg("Sending hourly cumulative stats summary to Telegram...");
+  sendTelegram(message, config.telegramToken, config.telegramChatId);
+
+  // Reset hourly counters
+  hourlyChecksCount = 0;
+  hourlySuccessfulChecks = 0;
+  hourlyCreditsStart = monitorState.apiCreditsRemaining;
+}
 
 async function runCycle() {
   if (isChecking) {
@@ -870,10 +907,18 @@ async function runCycle() {
 
   try {
     monitorState.lastCheckTime = new Date().toISOString();
+    hourlyChecksCount++;
+    if (hourlyCreditsStart === null && monitorState.apiCreditsRemaining !== null) {
+      hourlyCreditsStart = monitorState.apiCreditsRemaining;
+    }
+
     if (config.engine === "browser") {
       await runBrowserCycle();
+      hourlySuccessfulChecks++;
     } else {
       await runApiCycle();
+      hourlySuccessfulChecks++;
+      hourlyCreditsEnd = monitorState.apiCreditsRemaining;
     }
   } catch (err) {
     logMsg(`Scheduler execution failed: ${err.message}`);
@@ -895,19 +940,26 @@ async function runCycle() {
 function startScheduler() {
   if (schedulerIntervalId) clearInterval(schedulerIntervalId);
   if (contributionIntervalId) clearInterval(contributionIntervalId);
+  if (hourlySummaryIntervalId) clearInterval(hourlySummaryIntervalId);
   
   logMsg("Starting background scheduler loop...");
   config.isActive = true;
   saveConfig();
   
+  // Set up hourly stat counters
+  hourlyChecksCount = 0;
+  hourlySuccessfulChecks = 0;
+  hourlyCreditsStart = monitorState.apiCreditsRemaining;
+
   runCycle(); // Initial immediate check
   
-  const intervalMs = Math.max((config.checkIntervalSeconds || 300), 60) * 1000; // Minimum 60s
+  const intervalMs = Math.max((config.checkIntervalSeconds || 180), 60) * 1000;
   schedulerIntervalId = setInterval(runCycle, intervalMs);
+  
+  // Set up hourly summary loop (1 hour = 3600000ms)
+  hourlySummaryIntervalId = setInterval(sendHourlySummary, 60 * 60 * 1000);
+  
   monitorState.status = config.engine === "browser" ? "starting" : "running";
-
-  // Auto-contribution scheduler loop disabled per user request. 
-  // Contributions will be run manually by the user when they receive low-credit alerts.
 }
 
 function stopScheduler() {
@@ -918,6 +970,10 @@ function stopScheduler() {
   if (contributionIntervalId) {
     clearInterval(contributionIntervalId);
     contributionIntervalId = null;
+  }
+  if (hourlySummaryIntervalId) {
+    clearInterval(hourlySummaryIntervalId);
+    hourlySummaryIntervalId = null;
   }
   config.isActive = false;
   saveConfig();
