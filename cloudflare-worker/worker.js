@@ -50,5 +50,16 @@ export default {
         }
       });
     }
+  },
+
+  // Cron schedule handler to keep Render dashboard awake 24/7
+  async scheduled(event, env, ctx) {
+    const renderUrl = "https://us-visa-slot-checker.onrender.com/api/status";
+    console.log(`Cron triggered: Pinging Render to keep it awake -> ${renderUrl}`);
+    ctx.waitUntil(
+      fetch(renderUrl)
+        .then(res => console.log(`Render ping status: ${res.status}`))
+        .catch(err => console.error(`Failed to ping Render: ${err.message}`))
+    );
   }
 };
