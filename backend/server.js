@@ -956,8 +956,16 @@ function startScheduler() {
   const intervalMs = Math.max((config.checkIntervalSeconds || 120), 60) * 1000;
   schedulerIntervalId = setInterval(runCycle, intervalMs);
   
-  // Align hourly summary loop to trigger at the top of the hour (e.g., 4:00 PM, 5:00 PM)
-  const msToNextHour = 3600000 - (Date.now() % 3600000);
+  // Align hourly summary loop to trigger at the top of the hour in IST (UTC +5:30)
+  const IST_OFFSET = 5.5 * 60 * 60 * 1000;
+  const msToNextHour = 3600000 - ((Date.now() + IST_OFFSET) % 3600000);
+  
+  // Send immediate Telegram alert confirming active loop and the schedule
+  const nextHourDate = new Date(Date.now() + msToNextHour);
+  const targetTimeStr = nextHourDate.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", hour: 'numeric', minute: '2-digit', hour12: true });
+  logMsg(`Hourly scheduler initialized. First report scheduled at ${targetTimeStr} IST.`);
+  sendTelegram(`🟢 <b>US Visa Monitor Active</b>\n\nHourly cumulative summary reports successfully configured to trigger at the top of each hour.\n🕐 <b>First Report:</b> ${targetTimeStr} IST`, config.telegramToken, config.telegramChatId);
+
   hourlySummaryIntervalId = setTimeout(() => {
     sendHourlySummary();
     // After the first aligned trigger, set up a standard 1-hour interval
