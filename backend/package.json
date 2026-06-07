@@ -1,0 +1,18 @@
+{
+  "name": "us-visa-checker-backend",
+  "version": "1.0.0",
+  "description": "Express backend with Patchright browser automation for US Visa slot tracking",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "dev": "node server.js",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "nodemailer": "^6.9.13",
+    "patchright": "^1.45.0",
+    "undici": "^6.26.0"
+  }
+}
