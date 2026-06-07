@@ -956,8 +956,13 @@ function startScheduler() {
   const intervalMs = Math.max((config.checkIntervalSeconds || 180), 60) * 1000;
   schedulerIntervalId = setInterval(runCycle, intervalMs);
   
-  // Set up hourly summary loop (1 hour = 3600000ms)
-  hourlySummaryIntervalId = setInterval(sendHourlySummary, 60 * 60 * 1000);
+  // Align hourly summary loop to trigger at the top of the hour (e.g., 4:00 PM, 5:00 PM)
+  const msToNextHour = 3600000 - (Date.now() % 3600000);
+  hourlySummaryIntervalId = setTimeout(() => {
+    sendHourlySummary();
+    // After the first aligned trigger, set up a standard 1-hour interval
+    hourlySummaryIntervalId = setInterval(sendHourlySummary, 60 * 60 * 1000);
+  }, msToNextHour);
   
   monitorState.status = config.engine === "browser" ? "starting" : "running";
 }
@@ -972,6 +977,7 @@ function stopScheduler() {
     contributionIntervalId = null;
   }
   if (hourlySummaryIntervalId) {
+    clearTimeout(hourlySummaryIntervalId);
     clearInterval(hourlySummaryIntervalId);
     hourlySummaryIntervalId = null;
   }
