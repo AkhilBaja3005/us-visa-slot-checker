@@ -93,7 +93,7 @@ function loadConfig() {
   if (process.env.PORTAL_USERNAME) config.portalUsername = process.env.PORTAL_USERNAME;
   if (process.env.PORTAL_PASSWORD) config.portalPassword = process.env.PORTAL_PASSWORD;
   if (process.env.APPLICANT_NAME) config.applicantName = process.env.APPLICANT_NAME;
-  if (process.env.CHECK_INTERVAL_SECONDS) config.checkIntervalSeconds = parseInt(process.env.CHECK_INTERVAL_SECONDS) || 180;
+  if (process.env.CHECK_INTERVAL_SECONDS) config.checkIntervalSeconds = parseInt(process.env.CHECK_INTERVAL_SECONDS) || 120;
   if (process.env.OFC_CITIES) {
     config.ofcCities = process.env.OFC_CITIES.split(',').map(c => c.trim());
   }
@@ -953,7 +953,7 @@ function startScheduler() {
 
   runCycle(); // Initial immediate check
   
-  const intervalMs = Math.max((config.checkIntervalSeconds || 180), 60) * 1000;
+  const intervalMs = Math.max((config.checkIntervalSeconds || 120), 60) * 1000;
   schedulerIntervalId = setInterval(runCycle, intervalMs);
   
   // Align hourly summary loop to trigger at the top of the hour (e.g., 4:00 PM, 5:00 PM)
