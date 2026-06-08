@@ -46,7 +46,8 @@ let config = {
   isActive: true,
   portalUsername: "",
   portalPassword: "",
-  proxyUrl: ""
+  proxyUrl: "",
+  captchaApiKey: ""
 };
 
 // Global monitor state
@@ -99,6 +100,7 @@ function loadConfig() {
     config.ofcCities = process.env.OFC_CITIES.split(',').map(c => c.trim());
   }
   if (process.env.PROXY_URL) config.proxyUrl = process.env.PROXY_URL;
+  if (process.env.CAPTCHA_API_KEY) config.captchaApiKey = process.env.CAPTCHA_API_KEY;
   
   // Default isActive to true on server boots unless explicitly disabled via environment
   config.isActive = process.env.IS_ACTIVE !== "false";
@@ -260,6 +262,67 @@ async function isSessionAlive(page) {
   }
 }
 
+async function humanType(locator, text) {
+  try {
+    await locator.click({ delay: Math.floor(Math.random() * 100) + 50 });
+    await locator.focus();
+    await locator.clear().catch(() => {});
+    await locator.pressSequentially(text, { delay: Math.floor(Math.random() * 50) + 40 });
+    await locator.dispatchEvent('input').catch(() => {});
+    await locator.dispatchEvent('change').catch(() => {});
+    await locator.evaluate(el => el.blur()).catch(() => {});
+  } catch (err) {
+    await locator.fill(text);
+    await locator.dispatchEvent('input').catch(() => {});
+    await locator.dispatchEvent('change').catch(() => {});
+  }
+}
+
+async function solveImageCaptcha(page, apiKey) {
+  if (!apiKey || apiKey.includes("YOUR_")) return null;
+  try {
+    const captchaImg = page.locator('img[src*="captcha" i], img[src*="Captcha" i], img[id*="captcha" i], img[class*="captcha" i]').first();
+    if (await captchaImg.count() > 0 && await captchaImg.isVisible()) {
+      logMsg("CAPTCHA image detected. Attempting to solve via 2Captcha...");
+      const imgBase64 = await captchaImg.screenshot({ type: 'jpeg' }).then(buf => buf.toString('base64'));
+      
+      const submitRes = await fetch("https://2captcha.com/in.php", {
+        method: "POST",
+        body: new URLSearchParams({
+          key: apiKey,
+          method: "base64",
+          body: imgBase64,
+          json: 1
+        })
+      });
+      const submitData = await submitRes.json();
+      if (submitData.status !== 1) {
+        throw new Error(`2Captcha submission failed: ${submitData.request}`);
+      }
+      
+      const captchaId = submitData.request;
+      logMsg(`CAPTCHA submitted successfully. ID: ${captchaId}. Waiting for solution...`);
+      
+      for (let i = 0; i < 20; i++) {
+        await new Promise(r => setTimeout(r, 3000));
+        const checkRes = await fetch(`https://2captcha.com/res.php?key=${apiKey}&action=get&id=${captchaId}&json=1`);
+        const checkData = await checkRes.json();
+        if (checkData.status === 1) {
+          logMsg(`CAPTCHA solved: ${checkData.request}`);
+          return checkData.request;
+        }
+        if (checkData.request !== "CAPCHA_NOT_READY") {
+          throw new Error(`2Captcha error: ${checkData.request}`);
+        }
+      }
+      throw new Error("CAPTCHA solve timeout");
+    }
+  } catch (err) {
+    logMsg(`Failed to solve CAPTCHA: ${err.message}`);
+  }
+  return null;
+}
+
 async function checkCity(page, city, shouldLoadPage = false, applicantName = "") {
   try {
     logMsg(`Selecting consulate: ${city}`);
@@ -281,24 +344,49 @@ async function checkCity(page, city, shouldLoadPage = false, applicantName = "")
     const dropdown = page.locator("select");
     await dropdown.waitFor({ state: "visible", timeout: 15000 });
     
+    // Prepare network response promise to ensure page data updates
+    const responsePromise = page.waitForResponse(
+      response => response.url().toLowerCase().includes('schedule'),
+      { timeout: 5000 }
+    ).catch(() => null);
+
     // Select dropdown option
     await dropdown.selectOption({ label: city });
     
-    // Give page time to request new calendar layout
-    await page.waitForTimeout(3000);
+    // Wait for the API response or fallback to timeout
+    const resp = await responsePromise;
+    if (!resp) {
+      await page.waitForTimeout(1500);
+    } else {
+      await page.waitForTimeout(500); // Small DOM render buffer
+    }
+
+    // Dynamically wait (up to 4.5 seconds) for either "No Slots Available" banner or calendar elements
+    try {
+      await Promise.race([
+        page.locator("text=No Slots Available").waitFor({ state: "visible", timeout: 4500 }),
+        page.locator("input[type='date'], input[placeholder*='MM/DD/YYYY'], table.calendar, td.available, a.ui-state-default").waitFor({ state: "visible", timeout: 4500 })
+      ]);
+    } catch (e) {
+      // Fallback delay if waiting dynamically timed out
+      await page.waitForTimeout(1000);
+    }
 
     // Look for "No Slots Available" banner
     const noSlots = page.locator("text=No Slots Available");
     if (await noSlots.count() > 0) {
+      logMsg(`[${city}] Scan result: No slots available`);
       return false;
     }
 
     // Look for calendar or slot date elements
     const dateInput = page.locator("input[type='date'], input[placeholder*='MM/DD/YYYY'], table.calendar, td.available, a.ui-state-default");
     if (await dateInput.count() > 0) {
+      logMsg(`[${city}] Scan result: SLOTS AVAILABLE!`);
       return true;
     }
 
+    logMsg(`[${city}] Scan result: Uncertain (no clear indicators found)`);
     return null; // Uncertain
   } catch (err) {
     logMsg(`[${city}] Check error: ${err.message}`);
@@ -310,67 +398,20 @@ async function handleAutoLoginHelper(page) {
   try {
     const url = page.url();
     if (url.includes(LOGIN_DOMAIN)) {
-      const kba1R = page.locator('#kba1_response').first();
-      const isSecurityPage = await kba1R.count() > 0 && await kba1R.isVisible();
+
+
+      // 1. Detect if we are on the security questions page.
+      // Since security answers are often password inputs, standard page.locator('input[type="password"]')
+      // might match them. We check for paragraphs/labels containing typical security questions
+      // or inputs ending in '_response', or we check if there are multiple password inputs.
+      const isSecurityPage = await page.evaluate(() => {
+        const hasQuestionsList = document.querySelectorAll('#attributeList li.Paragraph p.textInParagraph').length > 0;
+        const hasResponseInputs = document.querySelectorAll('input[id$="_response"], input[id*="response" i], input[id*="kba" i], input[id*="kbq" i], input[id*="Security" i]').length > 0;
+        return hasQuestionsList || hasResponseInputs;
+      }).catch(() => false);
 
       if (isSecurityPage) {
-        // --- SECURITY QUESTIONS PAGE FLOW ---
-        const kba1Q = page.locator('#kba1_question, #kba1_question_label, label[for="kba1_response"]').first();
-        const kba2Q = page.locator('#kba2_question, #kba2_question_label, label[for="kba2_response"]').first();
-        const kba2R = page.locator('#kba2_response').first();
-
-        const getQuestionText = async (qLocator, rLocator) => {
-          let text = "";
-          if (await qLocator.count() > 0) {
-            text = await qLocator.innerText();
-          }
-          if (!text.trim()) {
-            text = await rLocator.evaluate(el => {
-              const id = el.id;
-              if (id) {
-                const label = document.querySelector(`label[for="${id}"]`);
-                if (label && label.innerText.trim()) return label.innerText.trim();
-              }
-              const container = el.closest('.form-group, .entry-item, .attrEntry, div');
-              if (container) {
-                const label = container.querySelector('label, .label');
-                if (label && label.innerText.trim()) return label.innerText.trim();
-                let sibling = el.previousElementSibling;
-                while (sibling) {
-                  if (sibling.tagName === 'LABEL' || sibling.tagName === 'SPAN' || sibling.tagName === 'DIV') {
-                    const t = sibling.innerText.trim();
-                    if (t) return t;
-                  }
-                  sibling = sibling.previousElementSibling;
-                }
-              }
-              return "";
-            }).catch(() => "");
-          }
-          return text.trim();
-        };
-
-        const q1Text = await getQuestionText(kba1Q, kba1R);
-        let q2Text = "";
-        const hasQ2 = await kba2R.count() > 0;
-        if (hasQ2) {
-          q2Text = await getQuestionText(kba2Q, kba2R);
-        }
-
-        // If the question text is still empty, it might be loading. Let's wait for the next iteration.
-        if (!q1Text || (hasQ2 && !q2Text)) {
-          logMsg("Security question labels are empty. Waiting for them to load...");
-          return;
-        }
-
-        logMsg("Security questions page detected. Autofilling questions...");
-        logMsg(`Question 1: "${q1Text}"`);
-        if (hasQ2) {
-          logMsg(`Question 2: "${q2Text}"`);
-        }
-
-        let q1Answer = "";
-        let q2Answer = "";
+        logMsg("Security questions page detected. Autofilling visible questions...");
 
         const matchQuestion = (text) => {
           const lower = text.toLowerCase();
@@ -386,27 +427,98 @@ async function handleAutoLoginHelper(page) {
           return "";
         };
 
-        if (q1Text) {
-          q1Answer = matchQuestion(q1Text);
-          if (q1Answer) {
-            logMsg(`Matched Q1. Autofilling: ${q1Answer}`);
-            await kba1R.fill(q1Answer);
-          } else {
-            logMsg(`WARNING: Could not match Q1: "${q1Text}". Please answer manually.`);
+        const getQuestionTextForInput = async (rLocator) => {
+          return await rLocator.evaluate(el => {
+            if (el.id) {
+              const label = document.querySelector(`label[for="${el.id}"]`);
+              if (label && label.innerText.trim()) return label.innerText.trim();
+              const labelById = document.getElementById(el.id + '_label') || 
+                                document.getElementById(el.id.replace('response', 'question')) || 
+                                document.getElementById(el.id.replace('response', 'question_label')) || 
+                                document.getElementById(el.id.replace('response', 'ReadOnly')) ||
+                                document.getElementById(el.id.replace('response', 'aReadOnly')) ||
+                                document.getElementById(el.id.replace('response', 'ReadOnly_label')) ||
+                                document.getElementById(el.id.replace('response', 'aReadOnly_label')) ||
+                                document.getElementById(el.id + 'ReadOnly') ||
+                                document.getElementById(el.id + 'aReadOnly');
+              if (labelById && labelById.innerText.trim()) return labelById.innerText.trim();
+            }
+            
+            // Try previous sibling of closest list item (common in Azure AD B2C custom policies)
+            let liParent = el.closest('li');
+            if (liParent) {
+              let sibling = liParent.previousElementSibling;
+              while (sibling) {
+                let textEl = sibling.querySelector('p.textInParagraph, p[id*="ReadOnly" i]');
+                if (!textEl || !textEl.innerText.trim()) {
+                  textEl = sibling.querySelector('label, .label, .question, [id*="ReadOnly" i], [id*="question" i]');
+                }
+                if (textEl && textEl.innerText.trim()) {
+                  return textEl.innerText.trim();
+                }
+                if (sibling.innerText && sibling.innerText.trim()) {
+                  return sibling.innerText.trim();
+                }
+                sibling = sibling.previousElementSibling;
+              }
+            }
+            
+            let parent = el.parentElement;
+            for (let i = 0; i < 3 && parent; i++) {
+              const label = parent.querySelector('label, .label, .question, .kba-question, [id*="ReadOnly" i], [id*="question" i]');
+              if (label && label.innerText.trim()) return label.innerText.trim();
+              parent = parent.parentElement;
+            }
+            let sibling = el.previousElementSibling;
+            while (sibling) {
+              if (sibling.innerText && sibling.innerText.trim()) {
+                return sibling.innerText.trim();
+              }
+              sibling = sibling.previousElementSibling;
+            }
+            return "";
+          }).catch(() => "");
+        };
+
+        const inputLocators = page.locator('input[id*="response" i], input[id*="kba" i], input[id*="kbq" i], input[id*="answer" i], input[id*="Security" i], input[id$="_response"], #attributeList input').filter({ visible: true });
+        const inputCount = await inputLocators.count();
+        let filledCount = 0;
+        let visibleCount = 0;
+
+        for (let i = 0; i < inputCount; i++) {
+          const input = inputLocators.nth(i);
+          if (await input.isVisible()) {
+            const id = await input.getAttribute('id').catch(() => "");
+            const name = await input.getAttribute('name').catch(() => "");
+            const qText = await getQuestionTextForInput(input);
+            logMsg(`[Debug] Visible Input index: ${i}, ID: "${id}", Name: "${name}", Resolved Label Text: "${qText || 'EMPTY'}"`);
+            
+            if (qText) {
+              const lowerQ = qText.toLowerCase();
+              if (lowerQ.includes("username") || lowerQ.includes("email") || lowerQ.includes("sign in name")) {
+                continue; // Skip username/email display fields
+              }
+              
+              visibleCount++;
+              logMsg(`Found visible question label: "${qText}"`);
+              const answer = matchQuestion(qText);
+              if (answer) {
+                const currentVal = await input.inputValue().catch(() => "");
+                if (currentVal !== answer) {
+                  logMsg(`Autofilling answer: "${answer}"`);
+                  await humanType(input, answer);
+                }
+                filledCount++;
+              } else {
+                logMsg(`WARNING: Could not match question: "${qText}". Please answer manually.`);
+              }
+            } else {
+              logMsg(`WARNING: Question label for input #${i+1} is empty.`);
+            }
           }
         }
 
-        if (hasQ2 && q2Text) {
-          q2Answer = matchQuestion(q2Text);
-          if (q2Answer) {
-            logMsg(`Matched Q2. Autofilling: ${q2Answer}`);
-            await kba2R.fill(q2Answer);
-          } else {
-            logMsg(`WARNING: Could not match Q2: "${q2Text}". Please answer manually.`);
-          }
-        }
-
-        const canSubmit = q1Answer && (!hasQ2 || q2Answer);
+        const canSubmit = visibleCount > 0 && filledCount === visibleCount;
         if (canSubmit) {
           const continueBtn = page.locator('#continue, #next, button:text("Continue"), button:text("Next")').first();
           if (await continueBtn.count() > 0) {
@@ -414,19 +526,19 @@ async function handleAutoLoginHelper(page) {
             await continueBtn.click();
           }
         } else {
-          logMsg("Cannot auto-submit yet. Answers are missing or couldn't be matched.");
+          logMsg("Cannot auto-submit yet. Some security questions could not be automatically filled.");
         }
 
       } else {
         // --- STANDARD LOGIN PAGE FLOW ---
-        const emailInput = page.locator('#email, #logonIdentifier, input[type="email"], input[placeholder*="username" i]').first();
+        const emailInput = page.locator('#email, #logonIdentifier, #username, #signInName, input[type="email"], input[name*="username" i], input[name*="login" i], input[id*="signin" i], input[id*="login" i], input[id*="user" i], input[placeholder*="username" i], input[placeholder*="email" i]').first();
         const passwordInput = page.locator('#password, input[type="password"]').first();
         
         if (config.portalUsername && await emailInput.count() > 0) {
           const currentVal = await emailInput.inputValue().catch(() => "");
-          if (!currentVal) {
+          if (currentVal !== config.portalUsername) {
             logMsg("Autofilling portal username...");
-            await emailInput.fill(config.portalUsername);
+            await humanType(emailInput, config.portalUsername);
           }
         }
         
@@ -434,9 +546,46 @@ async function handleAutoLoginHelper(page) {
           const currentVal = await passwordInput.inputValue().catch(() => "");
           const id = await passwordInput.getAttribute('id').catch(() => "");
           const isKbaResponse = id && id.includes("kba");
-          if (!currentVal && !isKbaResponse) {
+          if (currentVal !== config.portalPassword && !isKbaResponse) {
             logMsg("Autofilling portal password...");
-            await passwordInput.fill(config.portalPassword);
+            await humanType(passwordInput, config.portalPassword);
+          }
+        }
+
+        // Check if CAPTCHA is visible
+        const captchaImg = page.locator('img[src*="captcha" i], img[src*="Captcha" i], img[id*="captcha" i], img[class*="captcha" i]').first();
+        const hasCaptcha = await captchaImg.count() > 0 && await captchaImg.isVisible();
+
+        if (!hasCaptcha) {
+          const currentUsername = await emailInput.inputValue().catch(() => "");
+          const currentPassword = await passwordInput.inputValue().catch(() => "");
+          if (currentUsername === config.portalUsername && currentPassword === config.portalPassword) {
+            const loginBtn = page.locator('#next, #signIn, button:text("Sign In"), button:text("Login"), input[type="submit"]').first();
+            if (await loginBtn.count() > 0) {
+              logMsg("No CAPTCHA detected. Auto-submitting login credentials... (Waiting 1.5s)");
+              await page.waitForTimeout(1500);
+              await loginBtn.click();
+            }
+          }
+        } else if (config.captchaApiKey && config.captchaApiKey.trim()) {
+          // Auto-solve CAPTCHA if API key is supplied
+          const captchaInput = page.locator('input[name*="captcha" i], input[id*="captcha" i], input[placeholder*="captcha" i]').first();
+          if (await captchaInput.count() > 0) {
+            const currentVal = await captchaInput.inputValue().catch(() => "");
+            if (!currentVal) {
+              const solution = await solveImageCaptcha(page, config.captchaApiKey.trim());
+              if (solution) {
+                logMsg(`Entering solved CAPTCHA solution...`);
+                await humanType(captchaInput, solution);
+                
+                // Click Sign In / Login button
+                const loginBtn = page.locator('#next, #signIn, button:text("Sign In"), button:text("Login"), input[type="submit"]').first();
+                if (await loginBtn.count() > 0) {
+                  logMsg("Auto-submitting login form after CAPTCHA solution...");
+                  await loginBtn.click();
+                }
+              }
+            }
           }
         }
       }
@@ -450,6 +599,7 @@ async function waitForLoginAsync(page, timeoutSeconds) {
   const timeoutMs = (timeoutSeconds || 600) * 1000;
   const startTime = Date.now();
   let reachedLoginPage = false;
+  let lastLogUrl = "";
   
   // Give a small wait for the initial redirect to b2clogin.com to begin
   await page.waitForTimeout(4000);
@@ -461,8 +611,33 @@ async function waitForLoginAsync(page, timeoutSeconds) {
     }
     
     try {
+      try {
+        await page.screenshot({ path: path.join(rootDir, 'current_page.png') });
+      } catch (screenshotErr) {
+        // Ignore screenshot failures
+      }
       const url = page.url();
-      const hostname = await page.evaluate(() => window.location.hostname);
+      let hostname = "";
+      try {
+        hostname = new URL(url).hostname;
+      } catch (e) {
+        // Fallback if URL is about:blank
+      }
+      
+      const title = await page.title().catch(() => "");
+      const isCloudflare = url.includes("cf_chl") || title.includes("Just a moment") || title.includes("Cloudflare");
+      
+      if (isCloudflare) {
+        if (url !== lastLogUrl) {
+          lastLogUrl = url;
+        }
+        await new Promise(r => setTimeout(r, 6000));
+        continue;
+      }
+
+      if (url !== lastLogUrl) {
+        lastLogUrl = url;
+      }
       
       // If we see the login domain, we flag that we have reached the login page
       if (url.includes(LOGIN_DOMAIN) || hostname.includes(LOGIN_DOMAIN)) {
@@ -487,7 +662,7 @@ async function waitForLoginAsync(page, timeoutSeconds) {
         } else {
           // Case B: We loaded the page and were never redirected to b2clogin.com (e.g. cookies are alive).
           // We check if a logged-in element is visible (e.g., text including Logout, Sign Out, or Dashboard).
-          const loggedInIndicator = page.locator('text=Sign Out, text=Logout, text=Dashboard, #schedule-appointment');
+          const loggedInIndicator = page.locator('text=Sign Out, text=Logout, text=Dashboard, #schedule-appointment, .username, a[href*="logout" i], a[href*="signout" i]');
           if (await loggedInIndicator.count() > 0) {
             isSuccess = true;
           }
@@ -499,8 +674,8 @@ async function waitForLoginAsync(page, timeoutSeconds) {
           triggerDesktopNotification("US Visa Slot Monitor", "Login verified. Direct monitoring active!");
           sendTelegram("✅ <b>Login Verified</b>. The browser monitor is now checking slots.", config.telegramToken, config.telegramChatId);
           
-          // Trigger check cycle immediately
-          setTimeout(runCycle, 2000);
+          // Trigger check cycle with a safety delay to let session and cookies settle
+          setTimeout(runCycle, 8000);
           return;
         }
       }
@@ -580,7 +755,8 @@ async function runBrowserContributionCycle() {
       viewport: { width: 1280, height: 800 },
       args: [
         `--disable-extensions-except=${extensionPath}`,
-        `--load-extension=${extensionPath}`
+        `--load-extension=${extensionPath}`,
+        '--disable-features=IsolateOrigins,site-per-process,BlockThirdPartyCookies'
       ]
     });
 
@@ -636,7 +812,8 @@ async function runBrowserCycle() {
         viewport: { width: 1280, height: 800 },
         args: [
           `--disable-extensions-except=${extensionPath}`,
-          `--load-extension=${extensionPath}`
+          `--load-extension=${extensionPath}`,
+          '--disable-features=IsolateOrigins,site-per-process,BlockThirdPartyCookies'
         ]
       });
       
@@ -660,6 +837,22 @@ async function runBrowserCycle() {
       };
 
       activePage = activeContext.pages()[0] || await activeContext.newPage();
+      
+      const setupPageListeners = (p) => {
+        p.on('console', msg => {
+          const text = msg.text();
+          if (msg.type() === 'error' || msg.type() === 'warning' || text.toLowerCase().includes('error') || text.toLowerCase().includes('failed') || text.toLowerCase().includes('cookie')) {
+            logMsg(`[Browser Console] [${msg.type().toUpperCase()}] ${text}`);
+          }
+        });
+        p.on('pageerror', err => {
+          logMsg(`[Browser Page Error] ${err.message}`);
+        });
+      };
+      
+      setupPageListeners(activePage);
+      activeContext.on('page', p => setupPageListeners(p));
+      
       monitorState.status = "awaiting_login";
       logMsg("Waiting for manual login inside browser window...");
       
@@ -690,7 +883,13 @@ async function runBrowserCycle() {
   // Load the OFC scheduling page once to start the checking process and check session validity
   logMsg("Loading OFC scheduling page...");
   try {
-    await activePage.goto(OFC_SCHEDULE_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    const response = await activePage.goto(OFC_SCHEDULE_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    
+    // Check if the response returned an HTTP error status (4xx or 5xx)
+    if (response && response.status() >= 400) {
+      throw new Error(`Server returned HTTP status ${response.status()}`);
+    }
+
     await activePage.waitForTimeout(2000);
     
     const hostname = await activePage.evaluate(() => window.location.hostname);
@@ -702,6 +901,14 @@ async function runBrowserCycle() {
       await activePage.goto(HOME_URL);
       waitForLoginAsync(activePage, config.loginTimeoutSeconds);
       return;
+    }
+
+    // Verify the consulate select dropdown is visible to confirm we are successfully on the OFC scheduling page
+    const dropdown = activePage.locator("select");
+    try {
+      await dropdown.waitFor({ state: "visible", timeout: 8000 });
+    } catch (e) {
+      throw new Error("OFC page loaded, but consulate select dropdown is not visible. (Possibly blocked, restricted dashboard page, or empty session)");
     }
   } catch (err) {
     logMsg(`Failed to load OFC page: ${err.message}`);

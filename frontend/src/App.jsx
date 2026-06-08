@@ -61,7 +61,8 @@ export default function App() {
     checkVisaSlotsApiKey: "",
     ofcCities: [...INDIA_VACs],
     portalUsername: "",
-    portalPassword: ""
+    portalPassword: "",
+    captchaApiKey: ""
   });
 
   // Live status state
@@ -368,15 +369,25 @@ export default function App() {
                       />
                     </div>
 
-                    <div className="form-group">
-                      <label>Portal Password</label>
-                      <input
-                        type="password"
-                        placeholder="Portal Password"
-                        value={formConfig.portalPassword || ""}
-                        onChange={(e) => setFormConfig({ ...formConfig, portalPassword: e.target.value })}
-                      />
-                    </div>
+                     <div className="form-group">
+                       <label>Portal Password</label>
+                       <input
+                         type="password"
+                         placeholder="Portal Password"
+                         value={formConfig.portalPassword || ""}
+                         onChange={(e) => setFormConfig({ ...formConfig, portalPassword: e.target.value })}
+                       />
+                     </div>
+ 
+                     <div className="form-group full-width">
+                       <label>2Captcha API Key (Optional auto-login solver)</label>
+                       <input
+                         type="password"
+                         placeholder="Enter 2Captcha Key for auto CAPTCHA solving"
+                         value={formConfig.captchaApiKey || ""}
+                         onChange={(e) => setFormConfig({ ...formConfig, captchaApiKey: e.target.value })}
+                       />
+                     </div>
 
                   </>
                 ) : (
