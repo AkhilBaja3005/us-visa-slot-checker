@@ -61,12 +61,7 @@ export default function App() {
     checkVisaSlotsApiKey: "",
     ofcCities: [...INDIA_VACs],
     portalUsername: "",
-    portalPassword: "",
-    securityJob: "",
-    securityCar: "",
-    securitySchool: "",
-    securityFood: "",
-    proxyUrl: ""
+    portalPassword: ""
   });
 
   // Live status state
@@ -383,49 +378,6 @@ export default function App() {
                       />
                     </div>
 
-                    <div className="form-group full-width" style={{ borderTop: '1px dashed var(--border-glass)', paddingTop: '0.75rem', marginTop: '0.25rem' }}>
-                      <label style={{ color: '#818cf8', fontSize: '0.75rem', fontWeight: 'bold' }}>Security Question Autofills</label>
-                    </div>
-
-                    <div className="form-group" style={{ gridColumn: 'span 1' }}>
-                      <label>Job Answer</label>
-                      <input
-                        type="text"
-                        placeholder="e.g. J"
-                        value={formConfig.securityJob || ""}
-                        onChange={(e) => setFormConfig({ ...formConfig, securityJob: e.target.value })}
-                      />
-                    </div>
-
-                    <div className="form-group" style={{ gridColumn: 'span 1' }}>
-                      <label>Car Answer</label>
-                      <input
-                        type="text"
-                        placeholder="e.g. C"
-                        value={formConfig.securityCar || ""}
-                        onChange={(e) => setFormConfig({ ...formConfig, securityCar: e.target.value })}
-                      />
-                    </div>
-
-                    <div className="form-group" style={{ gridColumn: 'span 1' }}>
-                      <label>School Answer</label>
-                      <input
-                        type="text"
-                        placeholder="e.g. S"
-                        value={formConfig.securitySchool || ""}
-                        onChange={(e) => setFormConfig({ ...formConfig, securitySchool: e.target.value })}
-                      />
-                    </div>
-
-                    <div className="form-group" style={{ gridColumn: 'span 1' }}>
-                      <label>Food Answer</label>
-                      <input
-                        type="text"
-                        placeholder="e.g. F"
-                        value={formConfig.securityFood || ""}
-                        onChange={(e) => setFormConfig({ ...formConfig, securityFood: e.target.value })}
-                      />
-                    </div>
                   </>
                 ) : (
                   <>

@@ -46,10 +46,6 @@ let config = {
   isActive: true,
   portalUsername: "",
   portalPassword: "",
-  securityJob: "",
-  securityCar: "",
-  securitySchool: "",
-  securityFood: "",
   proxyUrl: ""
 };
 
@@ -102,9 +98,6 @@ function loadConfig() {
   if (process.env.OFC_CITIES) {
     config.ofcCities = process.env.OFC_CITIES.split(',').map(c => c.trim());
   }
-  if (process.env.SECURITY_JOB) config.securityJob = process.env.SECURITY_JOB;
-  if (process.env.SECURITY_CAR) config.securityCar = process.env.SECURITY_CAR;
-  if (process.env.SECURITY_SCHOOL) config.securitySchool = process.env.SECURITY_SCHOOL;
   if (process.env.PROXY_URL) config.proxyUrl = process.env.PROXY_URL;
   
   // Default isActive to true on server boots unless explicitly disabled via environment
