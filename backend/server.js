@@ -945,7 +945,7 @@ async function runCycle() {
 }
 
 function startScheduler() {
-  if (schedulerIntervalId) clearInterval(schedulerIntervalId);
+  if (schedulerIntervalId) clearTimeout(schedulerIntervalId);
   if (contributionIntervalId) clearInterval(contributionIntervalId);
   if (hourlySummaryIntervalId) clearInterval(hourlySummaryIntervalId);
   
@@ -958,10 +958,24 @@ function startScheduler() {
   hourlySuccessfulChecks = 0;
   hourlyCreditsStart = monitorState.apiCreditsRemaining;
 
-  runCycle(); // Initial immediate check
-  
-  const intervalMs = Math.max((config.checkIntervalSeconds || 120), 60) * 1000;
-  schedulerIntervalId = setInterval(runCycle, intervalMs);
+  // Schedule cycles dynamically with random delays to prevent bot detection profiles
+  function scheduleNextCycle() {
+    if (!config.isActive) return;
+    
+    // Add a random fluctuation (+/- 15 seconds) to the interval
+    const baseIntervalMs = Math.max((config.checkIntervalSeconds || 120), 60) * 1000;
+    const fluctuationMs = (Math.random() * 30 - 15) * 1000; // Random offset between -15s and +15s
+    const nextDelayMs = Math.max(60000, baseIntervalMs + fluctuationMs); // Ensure minimum 60s
+    
+    schedulerIntervalId = setTimeout(async () => {
+      await runCycle();
+      scheduleNextCycle();
+    }, nextDelayMs);
+  }
+
+  runCycle().then(() => {
+    scheduleNextCycle();
+  });
   
   // Align hourly summary loop to trigger at the top of the hour in IST (UTC +5:30)
   const IST_OFFSET = 5.5 * 60 * 60 * 1000;
@@ -984,7 +998,7 @@ function startScheduler() {
 
 function stopScheduler() {
   if (schedulerIntervalId) {
-    clearInterval(schedulerIntervalId);
+    clearTimeout(schedulerIntervalId);
     schedulerIntervalId = null;
   }
   if (contributionIntervalId) {

@@ -36,12 +36,7 @@ const INDIA_VACs = [
   "HYDERABAD VAC",
   "KOLKATA VAC",
   "MUMBAI VAC",
-  "NEW DELHI VAC",
-  "CHENNAI",
-  "HYDERABAD",
-  "KOLKATA",
-  "MUMBAI",
-  "NEW DELHI"
+  "NEW DELHI VAC"
 ];
 
 export default function App() {
@@ -232,12 +227,15 @@ export default function App() {
   };
 
   const handleCityToggle = (city) => {
-    const isSelected = formConfig.ofcCities.includes(city);
+    const cleanCity = city.replace(/\s*VAC\s*/i, "").trim();
+    const isSelected = formConfig.ofcCities.includes(cleanCity);
     let updated;
     if (isSelected) {
-      updated = formConfig.ofcCities.filter(c => c !== city);
+      // Remove both formats
+      updated = formConfig.ofcCities.filter(c => c !== cleanCity && c !== `${cleanCity} VAC`);
     } else {
-      updated = [...formConfig.ofcCities, city];
+      // Add both formats
+      updated = [...formConfig.ofcCities, cleanCity, `${cleanCity} VAC`];
     }
     setFormConfig({ ...formConfig, ofcCities: updated });
   };
@@ -407,7 +405,8 @@ export default function App() {
                   <label>Target OFC Consulates (Select to check)</label>
                   <div className="checkbox-grid">
                     {INDIA_VACs.map(city => {
-                      const isChecked = formConfig.ofcCities.includes(city);
+                      const cleanCity = city.replace(/\s*VAC\s*/i, "").trim();
+                      const isChecked = formConfig.ofcCities.includes(cleanCity) || formConfig.ofcCities.includes(`${cleanCity} VAC`);
                       return (
                         <label key={city} className={`checkbox-label ${isChecked ? 'checked' : ''}`}>
                           <input
@@ -416,7 +415,7 @@ export default function App() {
                             onChange={() => handleCityToggle(city)}
                           />
                           <span className="checkbox-box"></span>
-                          {city.replace(' VAC', '')}
+                          {city}
                         </label>
                       );
                     })}
@@ -575,8 +574,19 @@ export default function App() {
             
             <div className="slots-container">
               {INDIA_VACs.map(city => {
-                const isConfigured = formConfig.ofcCities.includes(city);
-                const hasSlots = status.availableSlots[city];
+                const cleanCity = city.replace(/\s*VAC\s*/i, "").trim();
+                // Check if either format is active
+                const isConfigured = formConfig.ofcCities.includes(cleanCity) || formConfig.ofcCities.includes(`${cleanCity} VAC`);
+                
+                // Read slots status from either key
+                const rawHasSlots = status.availableSlots[cleanCity];
+                const vacHasSlots = status.availableSlots[`${cleanCity} VAC`];
+                
+                const hasSlots = (rawHasSlots === true || vacHasSlots === true) 
+                  ? true 
+                  : (rawHasSlots === false || vacHasSlots === false) 
+                    ? false 
+                    : null;
                 
                 let cardClass = "unknown";
                 let statusText = "Not Monitored";
@@ -596,7 +606,7 @@ export default function App() {
 
                 return (
                   <div key={city} className={`slot-card ${cardClass}`}>
-                    <div className="slot-city">{city.replace(' VAC', '')}</div>
+                    <div className="slot-city">{city}</div>
                     <div className={`slot-status-text ${cardClass}`}>
                       {statusText}
                     </div>
@@ -680,7 +690,7 @@ export default function App() {
                           <td>
                             {openList.length > 0 ? (
                               <span style={{ color: 'var(--success)', fontWeight: 600 }}>
-                                Open: {openList.map(c => c.replace(' VAC', '')).join(', ')}
+                                Open: {openList.join(', ')}
                               </span>
                             ) : (
                               <span style={{ color: 'var(--text-muted)' }}>No Slots</span>
