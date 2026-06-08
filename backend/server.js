@@ -816,7 +816,14 @@ async function runApiCycle() {
         const isAvailable = cityDetail.slots > 0;
         results[city] = isAvailable;
         if (isAvailable) {
-          foundSlots.push(`${city} (Slots: ${cityDetail.slots}, Last Updated: ${formatToIST(cityDetail.createdon) || 'N/A'})`);
+          const updateTime = cityDetail.createdon ? new Date(cityDetail.createdon).getTime() : 0;
+          const fifteenMins = 15 * 60 * 1000;
+          const isRecent = (Date.now() - updateTime) < fifteenMins;
+          if (isRecent) {
+            foundSlots.push(`${city} (Slots: ${cityDetail.slots}, Last Updated: ${formatToIST(cityDetail.createdon) || 'N/A'})`);
+          } else {
+            console.log(`[API Check] Slots found for ${city} but skipped (Older than 15 mins: Updated at ${formatToIST(cityDetail.createdon)})`);
+          }
         }
       } else {
         results[city] = null; // No data for this VAC in response
