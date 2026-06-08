@@ -816,7 +816,7 @@ async function runApiCycle() {
         const isAvailable = cityDetail.slots > 0;
         results[city] = isAvailable;
         if (isAvailable) {
-          foundSlots.push(`${city} (Slots: ${cityDetail.slots}, Last Updated: ${cityDetail.createdon || 'N/A'})`);
+          foundSlots.push(`${city} (Slots: ${cityDetail.slots}, Last Updated: ${formatToIST(cityDetail.createdon) || 'N/A'})`);
         }
       } else {
         results[city] = null; // No data for this VAC in response
@@ -1007,6 +1007,17 @@ function stopScheduler() {
 // Auto-start scheduler if configured active
 if (config.isActive) {
   startScheduler();
+}
+
+
+function formatToIST(gmtStr) {
+  if (gmtStr === "N/A" || gmtStr === undefined || gmtStr === null) return "N/A";
+  try {
+    const d = new Date(gmtStr);
+    return d.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", hour12: true });
+  } catch (e) {
+    return gmtStr;
+  }
 }
 
 // ── REST API Endpoints ──────────────────────────────────────────────────────
