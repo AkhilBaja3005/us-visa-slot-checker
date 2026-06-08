@@ -28,7 +28,7 @@ let config = {
   emailSmtpPass: "",
   emailTo: "",
   applicantName: "",
-  checkIntervalSeconds: 120,
+  checkIntervalSeconds: 180,
   loginTimeoutSeconds: 600,
   checkVisaSlotsApiKey: "",
   ofcCities: [
@@ -94,7 +94,7 @@ function loadConfig() {
   if (process.env.PORTAL_USERNAME) config.portalUsername = process.env.PORTAL_USERNAME;
   if (process.env.PORTAL_PASSWORD) config.portalPassword = process.env.PORTAL_PASSWORD;
   if (process.env.APPLICANT_NAME) config.applicantName = process.env.APPLICANT_NAME;
-  config.checkIntervalSeconds = parseInt(process.env.CHECK_INTERVAL_SECONDS) || config.checkIntervalSeconds || 120;
+  config.checkIntervalSeconds = parseInt(process.env.CHECK_INTERVAL_SECONDS) || config.checkIntervalSeconds || 180;
   if (process.env.OFC_CITIES) {
     config.ofcCities = process.env.OFC_CITIES.split(',').map(c => c.trim());
   }
@@ -677,7 +677,7 @@ async function runBrowserCycle() {
       config.isActive = false;
       saveConfig();
       cleanupBrowser();
-      return;
+      throw err;
     }
   }
 
@@ -707,7 +707,7 @@ async function runBrowserCycle() {
     logMsg(`Failed to load OFC page: ${err.message}`);
     if (!activeBrowser) return; // Browser closed
     monitorState.errors.push({ time: new Date().toISOString(), message: `Failed to load OFC page: ${err.message}` });
-    return;
+    throw err;
   }
 
   // Run checks
@@ -859,6 +859,7 @@ async function runApiCycle() {
   } catch (err) {
     logMsg(`API check cycle failed: ${err.message}`);
     monitorState.errors.push({ time: new Date().toISOString(), message: err.message });
+    throw err;
   }
 }
 
@@ -874,6 +875,7 @@ let hourlyChecksCount = 0;
 let hourlySuccessfulChecks = 0;
 let hourlyCreditsStart = null;
 let hourlyCreditsEnd = null;
+let consecutiveFailuresCount = 0;
 
 async function sendHourlySummary() {
   if (hourlyChecksCount === 0) return;
@@ -927,8 +929,15 @@ async function runCycle() {
       hourlySuccessfulChecks++;
       hourlyCreditsEnd = monitorState.apiCreditsRemaining;
     }
+    consecutiveFailuresCount = 0; // Reset on success
   } catch (err) {
     logMsg(`Scheduler execution failed: ${err.message}`);
+    consecutiveFailuresCount++;
+    if (consecutiveFailuresCount >= 3) {
+      logMsg(`Sending failure alert: 3 consecutive failures exceeded.`);
+      sendTelegram(`⚠️ <b>Visa Monitor Loop Failure</b>\n\nThe slot checker has encountered consecutive errors.\n\n❌ <b>Latest Error:</b> ${err.message}\n\nPlease check the Render logs or the dashboard console.`, config.telegramToken, config.telegramChatId);
+      consecutiveFailuresCount = 0; // Reset to avoid spamming
+    }
   } finally {
     isChecking = false;
     
@@ -957,13 +966,14 @@ function startScheduler() {
   hourlyChecksCount = 0;
   hourlySuccessfulChecks = 0;
   hourlyCreditsStart = monitorState.apiCreditsRemaining;
+  consecutiveFailuresCount = 0;
 
   // Schedule cycles dynamically with random delays to prevent bot detection profiles
   function scheduleNextCycle() {
     if (!config.isActive) return;
     
     // Add a random fluctuation (+/- 15 seconds) to the interval
-    const baseIntervalMs = Math.max((config.checkIntervalSeconds || 120), 60) * 1000;
+    const baseIntervalMs = Math.max((config.checkIntervalSeconds || 180), 60) * 1000;
     const fluctuationMs = (Math.random() * 30 - 15) * 1000; // Random offset between -15s and +15s
     const nextDelayMs = Math.max(60000, baseIntervalMs + fluctuationMs); // Ensure minimum 60s
     
