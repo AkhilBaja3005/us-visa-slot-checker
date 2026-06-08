@@ -32,10 +32,15 @@ const IconSettings = () => (
 );
 
 const INDIA_VACs = [
+  "CHENNAI",
   "CHENNAI VAC",
+  "HYDERABAD",
   "HYDERABAD VAC",
+  "KOLKATA",
   "KOLKATA VAC",
+  "MUMBAI",
   "MUMBAI VAC",
+  "NEW DELHI",
   "NEW DELHI VAC"
 ];
 
@@ -227,15 +232,12 @@ export default function App() {
   };
 
   const handleCityToggle = (city) => {
-    const cleanCity = city.replace(/\s*VAC\s*/i, "").trim();
-    const isSelected = formConfig.ofcCities.includes(cleanCity);
+    const isSelected = formConfig.ofcCities.includes(city);
     let updated;
     if (isSelected) {
-      // Remove both formats
-      updated = formConfig.ofcCities.filter(c => c !== cleanCity && c !== `${cleanCity} VAC`);
+      updated = formConfig.ofcCities.filter(c => c !== city);
     } else {
-      // Add both formats
-      updated = [...formConfig.ofcCities, cleanCity, `${cleanCity} VAC`];
+      updated = [...formConfig.ofcCities, city];
     }
     setFormConfig({ ...formConfig, ofcCities: updated });
   };
@@ -405,8 +407,7 @@ export default function App() {
                   <label>Target OFC Consulates (Select to check)</label>
                   <div className="checkbox-grid">
                     {INDIA_VACs.map(city => {
-                      const cleanCity = city.replace(/\s*VAC\s*/i, "").trim();
-                      const isChecked = formConfig.ofcCities.includes(cleanCity) || formConfig.ofcCities.includes(`${cleanCity} VAC`);
+                      const isChecked = formConfig.ofcCities.includes(city);
                       return (
                         <label key={city} className={`checkbox-label ${isChecked ? 'checked' : ''}`}>
                           <input
@@ -574,19 +575,11 @@ export default function App() {
             
             <div className="slots-container">
               {INDIA_VACs.map(city => {
-                const cleanCity = city.replace(/\s*VAC\s*/i, "").trim();
-                // Check if either format is active
-                const isConfigured = formConfig.ofcCities.includes(cleanCity) || formConfig.ofcCities.includes(`${cleanCity} VAC`);
+                // Check if active
+                const isConfigured = formConfig.ofcCities.includes(city);
                 
-                // Read slots status from either key
-                const rawHasSlots = status.availableSlots[cleanCity];
-                const vacHasSlots = status.availableSlots[`${cleanCity} VAC`];
-                
-                const hasSlots = (rawHasSlots === true || vacHasSlots === true) 
-                  ? true 
-                  : (rawHasSlots === false || vacHasSlots === false) 
-                    ? false 
-                    : null;
+                // Read slots status from key
+                const hasSlots = status.availableSlots[city];
                 
                 let cardClass = "unknown";
                 let statusText = "Not Monitored";
