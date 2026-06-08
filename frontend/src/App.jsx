@@ -36,7 +36,12 @@ const INDIA_VACs = [
   "HYDERABAD VAC",
   "KOLKATA VAC",
   "MUMBAI VAC",
-  "NEW DELHI VAC"
+  "NEW DELHI VAC",
+  "CHENNAI",
+  "HYDERABAD",
+  "KOLKATA",
+  "MUMBAI",
+  "NEW DELHI"
 ];
 
 export default function App() {

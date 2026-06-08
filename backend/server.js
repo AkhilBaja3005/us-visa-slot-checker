@@ -36,7 +36,12 @@ let config = {
     "HYDERABAD VAC",
     "KOLKATA VAC",
     "MUMBAI VAC",
-    "NEW DELHI VAC"
+    "NEW DELHI VAC",
+    "CHENNAI",
+    "HYDERABAD",
+    "KOLKATA",
+    "MUMBAI",
+    "NEW DELHI"
   ],
   isActive: true,
   portalUsername: "",
