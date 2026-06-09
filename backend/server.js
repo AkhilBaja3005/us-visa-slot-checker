@@ -736,21 +736,11 @@ async function waitForLoginAsync(page, timeoutSeconds) {
       const onPortal = !hostname.includes(LOGIN_DOMAIN) && hostname.includes("usvisascheduling.com");
       
       if (onPortal) {
-        let isSuccess = false;
+        // If we are back on the portal, check if we see indicators of being logged in (or if we explicitly completed login)
+        const loggedInIndicator = page.locator('text=Sign Out, text=Sign out, text=Logout, text=Dashboard, #schedule-appointment, select, .username, a[href*="logout" i], a[href*="signout" i], a[href*="logoff" i], a[title*="sign out" i]');
+        const hasLoggedInElements = await loggedInIndicator.count() > 0;
         
-        if (reachedLoginPage) {
-          // Case A: We went to b2clogin.com, and now we are back on the portal. This is a successful manual login.
-          isSuccess = true;
-        } else {
-          // Case B: We loaded the page and were never redirected to b2clogin.com (e.g. cookies are alive).
-          // We check if a logged-in element is visible (e.g., text including Logout, Sign Out, or Dashboard).
-          const loggedInIndicator = page.locator('text=Sign Out, text=Logout, text=Dashboard, #schedule-appointment, .username, a[href*="logout" i], a[href*="signout" i]');
-          if (await loggedInIndicator.count() > 0) {
-            isSuccess = true;
-          }
-        }
-        
-        if (isSuccess) {
+        if (reachedLoginPage || hasLoggedInElements) {
           logMsg("Login verified successfully!");
           monitorState.status = "running";
           triggerDesktopNotification("US Visa Slot Monitor", "Login verified. Direct monitoring active!");
