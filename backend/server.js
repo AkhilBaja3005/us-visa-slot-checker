@@ -1,8 +1,17 @@
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
-const path = require('path');
 const { exec } = require('child_process');
+const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+const { createClient } = require('@supabase/supabase-js');
+
+// Initialize Supabase if credentials are provided
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_KEY;
+const supabase = (supabaseUrl && supabaseKey) ? createClient(supabaseUrl, supabaseKey) : null;
 
 const app = express();
 const PORT = process.env.PORT || 8000;
@@ -19,14 +28,9 @@ const logFilePath = path.join(rootDir, 'app.log');
 
 // Global configuration state
 let config = {
-  engine: "browser", // "browser" or "api"
+  engine: "api", // "browser" or "api"
   telegramToken: "",
   telegramChatId: "",
-  emailSmtpHost: "",
-  emailSmtpPort: 587,
-  emailSmtpUser: "",
-  emailSmtpPass: "",
-  emailTo: "",
   applicantName: "",
   checkIntervalSeconds: 180,
   loginTimeoutSeconds: 600,
@@ -47,7 +51,15 @@ let config = {
   portalUsername: "",
   portalPassword: "",
   proxyUrl: "",
-  captchaApiKey: ""
+  captchaApiKey: "",
+  googleClientId: "",
+  googleClientSecret: "",
+  securitySchool: "",
+  securityCar: "",
+  securityJob: "",
+  securityFood: "",
+  allowedEmails: {},
+  jwtSecret: ""
 };
 
 // Global monitor state
@@ -74,17 +86,43 @@ function logMsg(message) {
 }
 
 // Load configurations
-function loadConfig() {
+async function loadConfig() {
   if (fs.existsSync(configPath)) {
     try {
       const data = fs.readFileSync(configPath, 'utf8');
       config = { ...config, ...JSON.parse(data) };
-      logMsg("Configuration loaded successfully.");
+      logMsg("Local configuration loaded successfully.");
     } catch (err) {
-      logMsg(`Error parsing config.json: ${err.message}`);
+      logMsg(`Error parsing local config.json: ${err.message}`);
     }
-  } else {
-    saveConfig();
+  }
+
+  if (supabase) {
+    try {
+      const { data: dbData, error } = await supabase
+        .from('us_visa_config')
+        .select('data')
+        .eq('id', 1)
+        .single();
+      
+      if (error && error.code !== 'PGRST116') {
+        throw error;
+      }
+      
+      if (dbData && dbData.data) {
+        const dbConfigData = { ...dbData.data };
+        delete dbConfigData.engine; // Ignore engine from Supabase
+        config = { ...config, ...dbConfigData };
+        logMsg("Configuration loaded from Supabase (ignoring engine field).");
+      } else {
+        logMsg("No configuration found in Supabase. Creating one with current config.");
+        await saveConfig();
+      }
+    } catch (err) {
+      logMsg(`Error loading config from Supabase: ${err.message}`);
+    }
+  } else if (!fs.existsSync(configPath)) {
+    await saveConfig();
   }
 
   // Override configuration values with environment variables if present (for cloud deployment)
@@ -101,51 +139,72 @@ function loadConfig() {
   }
   if (process.env.PROXY_URL) config.proxyUrl = process.env.PROXY_URL;
   if (process.env.CAPTCHA_API_KEY) config.captchaApiKey = process.env.CAPTCHA_API_KEY;
+  if (process.env.GOOGLE_CLIENT_ID) config.googleClientId = process.env.GOOGLE_CLIENT_ID;
+  if (process.env.GOOGLE_CLIENT_SECRET) config.googleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
   
-  // Default isActive to true on server boots unless explicitly disabled via environment
-  config.isActive = process.env.IS_ACTIVE !== "false";
+  // Generate a JWT secret if not present and save it to config.json
+  if (!config.jwtSecret) {
+    config.jwtSecret = crypto.randomBytes(32).toString('hex');
+    await saveConfig();
+  }
+
+  // Respect environmental override of isActive if explicitly provided
+  if (process.env.IS_ACTIVE !== undefined) {
+    config.isActive = process.env.IS_ACTIVE === "true";
+  }
 }
 
-function saveConfig() {
+async function saveConfig() {
   try {
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
     logMsg("Configuration saved to config.json.");
   } catch (err) {
     logMsg(`Error saving config.json: ${err.message}`);
   }
+
+  if (supabase) {
+    try {
+      // Omit sensitive local-only portal login credentials and security questions from Supabase
+      const dbConfig = { ...config };
+      dbConfig.engine = "api"; // Force engine to be "api" in Supabase
+      delete dbConfig.portalUsername;
+      delete dbConfig.portalPassword;
+      delete dbConfig.securitySchool;
+      delete dbConfig.securityCar;
+      delete dbConfig.securityJob;
+      delete dbConfig.securityFood;
+
+      const { error } = await supabase
+        .from('us_visa_config')
+        .upsert({ id: 1, data: dbConfig, updated_at: new Date().toISOString() });
+      if (error) throw error;
+      logMsg("Configuration saved to Supabase.");
+    } catch (err) {
+      logMsg(`Error saving config to Supabase: ${err.message}`);
+    }
+  }
 }
 
 // Load and Save History
 let historyLogs = [];
-function loadHistory() {
+async function loadHistory() {
   if (fs.existsSync(historyPath)) {
     try {
       const data = fs.readFileSync(historyPath, 'utf8');
       historyLogs = JSON.parse(data);
+      logMsg("Local history loaded successfully.");
     } catch (err) {
       logMsg(`Error parsing history.json: ${err.message}`);
     }
-  } else {
-    saveHistory();
   }
 }
 
-function saveHistory() {
+async function saveHistory(record) {
   try {
-    fs.writeFileSync(historyPath, JSON.stringify(historyLogs.slice(-1000), null, 2), 'utf8'); // Keep last 1000 records
+    fs.writeFileSync(historyPath, JSON.stringify(historyLogs.slice(-1000), null, 2), 'utf8');
   } catch (err) {
     logMsg(`Error saving history.json: ${err.message}`);
   }
-}
-
-// Initialize files
-if (!fs.existsSync(rootDir)) {
-  fs.mkdirSync(rootDir, { recursive: true });
-}
-loadConfig();
-loadHistory();
-if (!fs.existsSync(logFilePath)) {
-  fs.writeFileSync(logFilePath, `[${new Date().toLocaleString()}] US Visa Slot Tracker Logs Initialized.\n`, 'utf8');
 }
 
 // ── Notification Helpers ───────────────────────────────────────────────────
@@ -173,35 +232,7 @@ function sendTelegram(message, token, chatId) {
 }
 
 function sendEmail(subject, text, mailConfig) {
-  if (!mailConfig.emailSmtpHost || !mailConfig.emailTo) {
-    logMsg("[Email] Alert skipped (SMTP host or recipient missing).");
-    return;
-  }
-  const nodemailer = require('nodemailer');
-  const transporter = nodemailer.createTransport({
-    host: mailConfig.emailSmtpHost,
-    port: parseInt(mailConfig.emailSmtpPort) || 587,
-    secure: parseInt(mailConfig.emailSmtpPort) === 465,
-    auth: {
-      user: mailConfig.emailSmtpUser,
-      pass: mailConfig.emailSmtpPass
-    }
-  });
-
-  const mailOptions = {
-    from: mailConfig.emailSmtpUser || "us-visa-checker@local.com",
-    to: mailConfig.emailTo,
-    subject: subject,
-    text: text
-  };
-
-  transporter.sendMail(mailOptions, (error, info) => {
-    if (error) {
-      logMsg(`[Email] Send error: ${error.message}`);
-    } else {
-      logMsg(`[Email] Sent: ${info.response}`);
-    }
-  });
+  // SMTP email notifications disabled
 }
 
 function triggerDesktopNotification(title, message) {
@@ -602,7 +633,11 @@ async function waitForLoginAsync(page, timeoutSeconds) {
   let lastLogUrl = "";
   
   // Give a small wait for the initial redirect to b2clogin.com to begin
-  await page.waitForTimeout(4000);
+  try {
+    await page.waitForTimeout(4000);
+  } catch (e) {
+    return;
+  }
   
   while (Date.now() - startTime < timeoutMs) {
     if (!activeBrowser) {
@@ -700,7 +735,11 @@ async function waitForLoginContribution(page, timeoutSeconds) {
   const startTime = Date.now();
   let reachedLoginPage = false;
   
-  await page.waitForTimeout(4000);
+  try {
+    await page.waitForTimeout(4000);
+  } catch (e) {
+    return false;
+  }
   
   while (Date.now() - startTime < timeoutMs) {
     try {
@@ -938,6 +977,12 @@ async function runBrowserCycle() {
 
   // Check each city consulate by changing the select dropdown (without page reload)
   for (const city of config.ofcCities) {
+    // Abort if browser was closed or scheduler was stopped during the cycle
+    if (!activePage || !activeBrowser || !config.isActive) {
+      logMsg("Browser closed or scheduler stopped. Aborting scan cycle.");
+      break;
+    }
+    
     logMsg(`Scanning slots for ${city}...`);
     // Pass shouldLoadPage = false, and applicantName empty since it's already checked once
     const status = await checkCity(activePage, city, false, "");
@@ -1235,10 +1280,6 @@ function stopScheduler() {
   cleanupBrowser();
 }
 
-// Auto-start scheduler if configured active
-if (config.isActive) {
-  startScheduler();
-}
 
 
 function formatToIST(gmtStr) {
@@ -1251,18 +1292,183 @@ function formatToIST(gmtStr) {
   }
 }
 
+// ── Authentication & Real-time Stream Setup ───────────────────────────────
+
+let sseClients = [];
+
+function getCurrentStatus() {
+  return {
+    status: monitorState.status,
+    isActive: config.isActive,
+    engine: config.engine,
+    lastCheckTime: monitorState.lastCheckTime,
+    availableSlots: monitorState.availableSlots,
+    errors: monitorState.errors.slice(-10), // Only send recent errors
+    apiCreditsRemaining: monitorState.apiCreditsRemaining
+  };
+}
+
+function broadcastStatus() {
+  if (sseClients.length === 0) return;
+  const statusData = JSON.stringify(getCurrentStatus());
+  sseClients.forEach(client => {
+    try {
+      client.write(`data: ${statusData}\n\n`);
+    } catch (e) {
+      // Ignore write errors for closed clients
+    }
+  });
+}
+
+// Broadcast status to all connected dashboards every 3 seconds to keep them synced
+setInterval(broadcastStatus, 3000);
+
+function authenticateToken(req, res, next) {
+  // If Google OAuth credentials are not set up, bypass auth
+  if (!config.googleClientId || !config.googleClientSecret) {
+    return next();
+  }
+  
+  const authHeader = req.headers['authorization'];
+  const token = (authHeader && authHeader.split(' ')[1]) || req.query.token;
+  
+  if (!token) {
+    return res.status(401).json({ error: "Access token is missing" });
+  }
+  
+  jwt.verify(token, config.jwtSecret, (err, decoded) => {
+    if (err) {
+      return res.status(403).json({ error: "Token is invalid or expired" });
+    }
+    req.user = decoded;
+    next();
+  });
+}
+
+function requireAdmin(req, res, next) {
+  if (!config.googleClientId || !config.googleClientSecret) {
+    return next();
+  }
+  if (req.user && req.user.role === 'admin') {
+    return next();
+  }
+  res.status(403).json({ error: "Admin privileges required" });
+}
+
+// ── Google OAuth Endpoints ──────────────────────────────────────────────────
+
+app.get('/api/auth/google/url', (req, res) => {
+  if (!config.googleClientId) {
+    return res.status(400).json({ error: "Google Client ID is not configured." });
+  }
+  const { origin } = req.query;
+  const state = origin ? encodeURIComponent(origin) : '';
+  const redirectUri = `${req.protocol}://${req.get('host')}/api/auth/google/callback`;
+  const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(config.googleClientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=openid%20email%20profile&access_type=offline&prompt=consent&state=${state}`;
+  res.json({ url });
+});
+
+app.get('/api/auth/google/callback', async (req, res) => {
+  const { code, state } = req.query;
+  if (!code) {
+    return res.status(400).send("Authorization code is missing");
+  }
+  
+  const targetOrigin = state ? decodeURIComponent(state) : `${req.protocol}://${req.get('host')}`;
+  
+  try {
+    const redirectUri = `${req.protocol}://${req.get('host')}/api/auth/google/callback`;
+    
+    // Exchange auth code for access token
+    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code,
+        client_id: config.googleClientId,
+        client_secret: config.googleClientSecret,
+        redirect_uri: redirectUri,
+        grant_type: 'authorization_code'
+      })
+    });
+    
+    if (!tokenRes.ok) {
+      const errText = await tokenRes.text();
+      logMsg(`Google OAuth code exchange failed: ${errText}`);
+      return res.redirect(`${targetOrigin}/login?error=auth_failed`);
+    }
+    
+    const tokenData = await tokenRes.json();
+    const { access_token } = tokenData;
+    
+    // Fetch user profile from OpenID Connect
+    const userInfoRes = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
+      headers: { Authorization: `Bearer ${access_token}` }
+    });
+    
+    if (!userInfoRes.ok) {
+      return res.redirect(`${targetOrigin}/login?error=profile_failed`);
+    }
+    
+    const userInfo = await userInfoRes.json();
+    const email = userInfo.email;
+    
+    if (!email) {
+      return res.redirect(`${targetOrigin}/login?error=no_email`);
+    }
+    
+    // Bootstrap: First ever Google login becomes admin if allowedEmails is empty or has no admins
+    let allowedEmails = config.allowedEmails || {};
+    const hasAdmin = Object.values(allowedEmails).some(val => {
+      if (typeof val === 'string') return val === 'admin';
+      if (val && typeof val === 'object') return val.role === 'admin';
+      return false;
+    });
+    
+    if (!hasAdmin || Object.keys(allowedEmails).length === 0) {
+      allowedEmails[email] = { role: 'admin', phone: '' };
+      config.allowedEmails = allowedEmails;
+      saveConfig();
+      logMsg(`Bootstrap: Automatically registered first signed-in user (${email}) as admin.`);
+    }
+    
+    const userVal = allowedEmails[email];
+    if (!userVal) {
+      return res.redirect(`${targetOrigin}/login?error=unauthorized`);
+    }
+    
+    const role = typeof userVal === 'object' ? userVal.role : userVal;
+    
+    // Issue token valid for 30 days
+    const token = jwt.sign(
+      { email, role },
+      config.jwtSecret,
+      { expiresIn: '30d' }
+    );
+    
+    res.redirect(`${targetOrigin}/login-success?token=${encodeURIComponent(token)}&role=${encodeURIComponent(role)}&email=${encodeURIComponent(email)}`);
+  } catch (err) {
+    logMsg(`OAuth Callback processing error: ${err.message}`);
+    res.redirect(`${targetOrigin}/login?error=server_error`);
+  }
+});
+
 // ── REST API Endpoints ──────────────────────────────────────────────────────
 
-app.get('/api/config', (req, res) => {
+app.get('/api/config', authenticateToken, requireAdmin, (req, res) => {
   res.json(config);
 });
 
-app.post('/api/config', (req, res) => {
+app.post('/api/config', authenticateToken, requireAdmin, (req, res) => {
   const originalActive = config.isActive;
+  const originalJwtSecret = config.jwtSecret;
+  const originalEngine = config.engine;
   config = { ...config, ...req.body };
   
-  // Do not allow editing isActive directly via this config update endpoint to avoid race conditions
+  // Do not allow editing isActive or engine directly via this config update endpoint to avoid race conditions
   config.isActive = originalActive; 
+  config.jwtSecret = originalJwtSecret;
+  config.engine = originalEngine;
   saveConfig();
   
   logMsg("Configuration updated via API.");
@@ -1274,23 +1480,31 @@ app.post('/api/config', (req, res) => {
   res.json({ message: "Configuration updated successfully", config });
 });
 
-app.get('/api/status', (req, res) => {
-  res.json({
-    status: monitorState.status,
-    isActive: config.isActive,
-    engine: config.engine,
-    lastCheckTime: monitorState.lastCheckTime,
-    availableSlots: monitorState.availableSlots,
-    errors: monitorState.errors.slice(-10), // Only send recent errors
-    apiCreditsRemaining: monitorState.apiCreditsRemaining
+app.get('/api/status', authenticateToken, (req, res) => {
+  res.json(getCurrentStatus());
+});
+
+app.get('/api/status/stream', authenticateToken, (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+  
+  // Send initial state immediately
+  res.write(`data: ${JSON.stringify(getCurrentStatus())}\n\n`);
+  
+  sseClients.push(res);
+  
+  req.on('close', () => {
+    sseClients = sseClients.filter(client => client !== res);
   });
 });
 
-app.get('/api/history', (req, res) => {
+app.get('/api/history', authenticateToken, (req, res) => {
   res.json(historyLogs.slice(-100)); // Send last 100 entries
 });
 
-app.post('/api/scheduler/toggle', (req, res) => {
+app.post('/api/scheduler/toggle', authenticateToken, requireAdmin, (req, res) => {
   const { start } = req.body;
   if (start) {
     startScheduler();
@@ -1301,7 +1515,7 @@ app.post('/api/scheduler/toggle', (req, res) => {
   }
 });
 
-app.post('/api/test-alert', (req, res) => {
+app.post('/api/test-alert', authenticateToken, requireAdmin, async (req, res) => {
   const { channel } = req.body;
   const timeStr = new Date().toLocaleTimeString();
   logMsg(`Triggering test alert on channel: ${channel}`);
@@ -1312,19 +1526,12 @@ app.post('/api/test-alert', (req, res) => {
   } else if (channel === "telegram") {
     sendTelegram(`🤖 <b>US Visa Monitor Test</b>\n\nThis is a test message confirming your Telegram notification settings are correct!\n🕐 Sent at: ${timeStr}`, config.telegramToken, config.telegramChatId);
     res.json({ message: "Telegram alert sent" });
-  } else if (channel === "email") {
-    sendEmail(
-      "US Visa Slot Alert - SMTP Test Connection",
-      `Hello!\n\nThis email confirms that your SMTP configurations are functional.\n\nChecked at: ${timeStr}\nUS Visa Slot Monitor`,
-      config
-    );
-    res.json({ message: "SMTP test email dispatched" });
   } else {
     res.status(400).json({ error: "Invalid notification channel requested" });
   }
 });
 
-app.get('/api/logs', (req, res) => {
+app.get('/api/logs', authenticateToken, requireAdmin, (req, res) => {
   if (fs.existsSync(logFilePath)) {
     try {
       const data = fs.readFileSync(logFilePath, 'utf8');
@@ -1354,6 +1561,28 @@ if (fs.existsSync(frontendDistPath)) {
   logMsg("Static frontend files not found. Dashboard UI must be run separately via dev server.");
 }
 
-app.listen(PORT, () => {
-  logMsg(`Server listening on port ${PORT}`);
+// Initialize database and files, then start server
+async function initApp() {
+  if (!fs.existsSync(rootDir)) {
+    fs.mkdirSync(rootDir, { recursive: true });
+  }
+  await loadConfig();
+  await loadHistory();
+  if (!fs.existsSync(logFilePath)) {
+    fs.writeFileSync(logFilePath, `[${new Date().toLocaleString()}] US Visa Slot Tracker Logs Initialized.\n`, 'utf8');
+  }
+
+  // Auto-start scheduler if configured active
+  if (config.isActive) {
+    startScheduler();
+  }
+
+  app.listen(PORT, () => {
+    logMsg(`Server listening on port ${PORT}`);
+  });
+}
+
+initApp().catch(err => {
+  logMsg(`Fatal error during application startup: ${err.message}`);
+  process.exit(1);
 });

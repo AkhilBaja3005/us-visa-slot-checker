@@ -9,9 +9,11 @@
     "start": "node server.js"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.108.0",
     "cors": "^2.8.5",
+    "dotenv": "^17.4.2",
     "express": "^4.19.2",
-    "nodemailer": "^6.9.13",
+    "jsonwebtoken": "^9.0.3",
     "patchright": "^1.45.0",
     "undici": "^6.26.0"
   }

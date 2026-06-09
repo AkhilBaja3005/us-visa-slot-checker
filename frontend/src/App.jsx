@@ -50,11 +50,6 @@ export default function App() {
     engine: "browser",
     telegramToken: "",
     telegramChatId: "",
-    emailSmtpHost: "",
-    emailSmtpPort: 587,
-    emailSmtpUser: "",
-    emailSmtpPass: "",
-    emailTo: "",
     applicantName: "",
     checkIntervalSeconds: 300,
     loginTimeoutSeconds: 600,
@@ -62,7 +57,14 @@ export default function App() {
     ofcCities: [...INDIA_VACs],
     portalUsername: "",
     portalPassword: "",
-    captchaApiKey: ""
+    captchaApiKey: "",
+    googleClientId: "",
+    googleClientSecret: "",
+    securitySchool: "",
+    securityCar: "",
+    securityJob: "",
+    securityFood: "",
+    allowedEmails: {}
   });
 
   // Live status state
@@ -81,27 +83,133 @@ export default function App() {
   const [isOffline, setIsOffline] = useState(false);
   const [saveStatus, setSaveStatus] = useState({ type: "", message: "" });
   const [alertStatus, setAlertStatus] = useState({ type: "", message: "" });
+  
+  // Auth states
+  const [token, setToken] = useState(localStorage.getItem('token') || '');
+  const [role, setRole] = useState(localStorage.getItem('role') || '');
+  const [email, setEmail] = useState(localStorage.getItem('email') || '');
+  const [needLogin, setNeedLogin] = useState(false);
+  const [userEmailInput, setUserEmailInput] = useState('');
+  const [userPhoneInput, setUserPhoneInput] = useState('');
+  const [userRoleInput, setUserRoleInput] = useState('viewer');
+  const [waStatus, setWaStatus] = useState({ status: 'disconnected', qrCode: null });
 
   const terminalBodyRef = useRef(null);
 
-  // Fetch initial config and system status
+  // Helper for auth headers
+  const getAuthHeaders = () => {
+    return token ? { 'Authorization': `Bearer ${token}` } : {};
+  };
+
+  const authedFetch = async (url, options = {}) => {
+    const headers = {
+      ...options.headers,
+      ...getAuthHeaders()
+    };
+    try {
+      const res = await fetch(url, { ...options, headers });
+      if (res.status === 401 || res.status === 403) {
+        const cloned = res.clone();
+        const errData = await cloned.json().catch(() => ({}));
+        if (errData.error && errData.error.includes("Admin privileges required")) {
+          throw new Error("Admin privileges required");
+        }
+        // Redirect to login only if it is a session authentication failure
+        localStorage.removeItem('token');
+        localStorage.removeItem('role');
+        localStorage.removeItem('email');
+        setToken('');
+        setRole('');
+        setEmail('');
+        setNeedLogin(true);
+      }
+      return res;
+    } catch (e) {
+      if (e.message === "Admin privileges required") throw e;
+      setIsOffline(true);
+      throw e;
+    }
+  };
+
+  // Handle OAuth Redirect on mount
   useEffect(() => {
-    fetchConfig();
-    fetchStatus();
-    fetchLogs();
-    fetchHistory();
-
-    // Setup polling
-    const timer = setInterval(() => {
-      fetchStatus();
-      fetchLogs();
-      fetchHistory();
-    }, 3000);
-
-    return () => clearInterval(timer);
+    if (window.location.pathname === '/login-success') {
+      const params = new URLSearchParams(window.location.search);
+      const tokenVal = params.get('token');
+      const roleVal = params.get('role');
+      const emailVal = params.get('email');
+      if (tokenVal) {
+        localStorage.setItem('token', tokenVal);
+        localStorage.setItem('role', roleVal || '');
+        localStorage.setItem('email', emailVal || '');
+        setToken(tokenVal);
+        setRole(roleVal || '');
+        setEmail(emailVal || '');
+      }
+      window.location.href = '/';
+    }
   }, []);
 
-  // Auto-scroll logs terminal container only (avoids page scrolling)
+
+
+  // Sync state and stream updates
+  useEffect(() => {
+    let eventSource = null;
+    let logsTimer = null;
+
+    const initApp = async () => {
+      try {
+        // Test fetch status to see if login is needed
+        const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+        const testRes = await fetch(`${API_BASE}/status`, { headers });
+        
+        if (testRes.status === 401 || testRes.status === 403) {
+          setNeedLogin(true);
+          return;
+        }
+        
+        setNeedLogin(false);
+        fetchConfig();
+        fetchLogs();
+        fetchHistory();
+
+        // Connect to Server-Sent Events (SSE) status stream
+        const sseUrl = `${API_BASE}/status/stream` + (token ? `?token=${encodeURIComponent(token)}` : '');
+        eventSource = new EventSource(sseUrl);
+
+        eventSource.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            setStatus(data);
+            setIsOffline(false);
+          } catch (err) {
+            console.error("SSE parse error:", err);
+          }
+        };
+
+        eventSource.onerror = () => {
+          setIsOffline(true);
+        };
+
+        // Poll logs and history, but NOT status
+        logsTimer = setInterval(() => {
+          fetchLogs();
+          fetchHistory();
+        }, 4000);
+      } catch (err) {
+        setIsOffline(true);
+      }
+    };
+
+    initApp();
+
+    return () => {
+      if (eventSource) eventSource.close();
+      if (logsTimer) clearInterval(logsTimer);
+    };
+  }, [token]);
+
+  // Auto-scroll logs terminal container only
   useEffect(() => {
     if (terminalBodyRef.current) {
       terminalBodyRef.current.scrollTop = terminalBodyRef.current.scrollHeight;
@@ -110,62 +218,55 @@ export default function App() {
 
   const fetchConfig = async () => {
     try {
-      const res = await fetch(`${API_BASE}/config`);
-      if (!res.ok) throw new Error("API error");
-      const data = await res.json();
-      setFormConfig(data);
-      setIsOffline(false);
+      const res = await authedFetch(`${API_BASE}/config`);
+      if (res && res.ok) {
+        const data = await res.json();
+        setFormConfig(data);
+        setIsOffline(false);
+      }
     } catch (err) {
-      setIsOffline(true);
       console.error("Failed to fetch config:", err);
-    }
-  };
-
-  const fetchStatus = async () => {
-    try {
-      const res = await fetch(`${API_BASE}/status`);
-      if (!res.ok) throw new Error("API error");
-      const data = await res.json();
-      setStatus(data);
-      setIsOffline(false);
-    } catch (err) {
-      setIsOffline(true);
     }
   };
 
   const fetchLogs = async () => {
     try {
-      const res = await fetch(`${API_BASE}/logs`);
-      if (!res.ok) throw new Error("API error");
-      const data = await res.json();
-      setLogs(data.logs || []);
+      if (role === 'viewer') return; // Viewers don't pull logs
+      const res = await authedFetch(`${API_BASE}/logs`);
+      if (res && res.ok) {
+        const data = await res.json();
+        setLogs(data.logs || []);
+      }
     } catch (err) {
-      // Don't flood console if offline
+      // Offline fallback
     }
   };
 
   const fetchHistory = async () => {
     try {
-      const res = await fetch(`${API_BASE}/history`);
-      if (!res.ok) throw new Error("API error");
-      const data = await res.json();
-      setHistory(data || []);
+      const res = await authedFetch(`${API_BASE}/history`);
+      if (res && res.ok) {
+        const data = await res.json();
+        setHistory(data || []);
+      }
     } catch (err) {
-      // Don't flood console if offline
+      // Offline fallback
     }
   };
 
   // Toggle scheduler running state
   const handleToggleScheduler = async () => {
+    if (role === 'viewer') return;
     const newState = !status.isActive;
     try {
-      const res = await fetch(`${API_BASE}/scheduler/toggle`, {
+      const res = await authedFetch(`${API_BASE}/scheduler/toggle`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ start: newState })
       });
       if (!res.ok) throw new Error();
-      fetchStatus();
+      const sData = await res.json();
+      setStatus(prev => ({ ...prev, isActive: newState, status: sData.status }));
       fetchLogs();
     } catch (err) {
       setAlertStatus({ type: "error", message: "Failed to toggle slot monitor." });
@@ -176,19 +277,19 @@ export default function App() {
   // Save config changes
   const handleSaveConfig = async (e) => {
     if (e) e.preventDefault();
+    if (role === 'viewer') return;
     setSaveStatus({ type: "info", message: "Saving configurations..." });
     try {
-      const res = await fetch(`${API_BASE}/config`, {
+      const res = await authedFetch(`${API_BASE}/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formConfig)
       });
       if (!res.ok) throw new Error();
       const data = await res.json();
-      setFormConfig(data.config);
+      setFormConfig(data.config || data);
       setSaveStatus({ type: "success", message: "Configurations saved successfully!" });
       setTimeout(() => setSaveStatus({ type: "", message: "" }), 3000);
-      fetchStatus();
     } catch (err) {
       setSaveStatus({ type: "error", message: "Failed to update configurations." });
       setTimeout(() => setSaveStatus({ type: "", message: "" }), 4000);
@@ -197,16 +298,16 @@ export default function App() {
 
   // Switch engines (immediately saves and toggles)
   const handleSwitchEngine = async (engine) => {
+    if (role === 'viewer') return;
     const updated = { ...formConfig, engine };
     setFormConfig(updated);
     try {
-      const res = await fetch(`${API_BASE}/config`, {
+      const res = await authedFetch(`${API_BASE}/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updated)
       });
       if (!res.ok) throw new Error();
-      fetchStatus();
     } catch (err) {
       console.error("Failed to switch engine:", err);
     }
@@ -214,8 +315,9 @@ export default function App() {
 
   // Trigger test alerts
   const handleTestAlert = async (channel) => {
+    if (role === 'viewer') return;
     try {
-      const res = await fetch(`${API_BASE}/test-alert`, {
+      const res = await authedFetch(`${API_BASE}/test-alert`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ channel })
@@ -242,6 +344,66 @@ export default function App() {
     }
     setFormConfig({ ...formConfig, ofcCities: updated });
   };
+
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('role');
+    localStorage.removeItem('email');
+    setToken('');
+    setRole('');
+    setEmail('');
+    setNeedLogin(true);
+  };
+
+  const handleGoogleLogin = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/auth/google/url?origin=${window.location.origin}`);
+      const data = await res.json();
+      if (data.url) {
+        window.location.href = data.url;
+      }
+    } catch (e) {
+      console.error("Failed to launch Google auth:", e);
+    }
+  };
+
+  if (needLogin) {
+    return (
+      <div className="app-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '80vh' }}>
+        <div className="glass-card" style={{ maxWidth: '400px', width: '100%', padding: '2.5rem', textAlign: 'center' }}>
+          <h1 style={{ fontSize: '1.8rem', color: '#fff', marginBottom: '0.5rem', fontWeight: 800 }}>US Visa Slot Monitor 🇮🇳</h1>
+          <p style={{ color: '#94a3b8', fontSize: '0.9rem', marginBottom: '2rem' }}>Sign in to access the active slot checker console.</p>
+          
+          <button 
+            onClick={handleGoogleLogin} 
+            className="btn btn-success" 
+            style={{ 
+              width: '100%', 
+              padding: '0.75rem', 
+              fontSize: '1rem', 
+              display: 'flex', 
+              alignItems: 'center', 
+              justifyContent: 'center', 
+              gap: '0.75rem', 
+              background: 'linear-gradient(135deg, #4285F4, #357ae8)',
+              border: 'none',
+              borderRadius: '0.5rem',
+              fontWeight: 600,
+              cursor: 'pointer'
+            }}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style={{ marginRight: '6px' }}>
+              <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+              <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+              <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" fill="#FBBC05"/>
+              <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+            </svg>
+            Sign in with Google
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="app-container">
@@ -288,14 +450,39 @@ export default function App() {
           </div>
 
           {/* Start/Stop Button */}
-          <button
-            onClick={handleToggleScheduler}
-            disabled={isOffline}
-            className={`btn ${status.isActive ? 'btn-danger' : 'btn-success'}`}
-          >
-            {status.isActive ? <IconPause /> : <IconPlay />}
-            {status.isActive ? 'Stop Scanning' : 'Start Scanning'}
-          </button>
+          {role === 'viewer' ? (
+            <div style={{
+              background: 'rgba(245, 158, 11, 0.12)',
+              border: '1px solid rgba(245, 158, 11, 0.3)',
+              color: '#fbbf24',
+              padding: '0.5rem 0.85rem',
+              borderRadius: '0.375rem',
+              fontSize: '0.8rem',
+              fontWeight: 600
+            }}>
+              Viewer Mode (Read-Only)
+            </div>
+          ) : (
+            <button
+              onClick={handleToggleScheduler}
+              disabled={isOffline}
+              className={`btn ${status.isActive ? 'btn-danger' : 'btn-success'}`}
+            >
+              {status.isActive ? <IconPause /> : <IconPlay />}
+              {status.isActive ? 'Stop Scanning' : 'Start Scanning'}
+            </button>
+          )}
+
+          {/* Logout Button */}
+          {token && (
+            <button
+              onClick={handleLogout}
+              className="btn btn-secondary"
+              style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', color: '#f87171', fontSize: '0.8rem', padding: '0.5rem 0.75rem' }}
+            >
+              Sign Out
+            </button>
+          )}
         </div>
       </header>
 
@@ -328,251 +515,361 @@ export default function App() {
             </div>
 
             <form onSubmit={handleSaveConfig}>
-              <div className="settings-grid">
-                
-                {/* Engine Specific Options */}
-                {formConfig.engine === 'browser' ? (
-                  <>
-                    <div className="form-group full-width">
-                      <div style={{ background: 'rgba(99, 102, 241, 0.08)', border: '1px solid rgba(99, 102, 241, 0.2)', padding: '0.85rem', borderRadius: '0.5rem', fontSize: '0.8rem', color: '#a5b4fc', lineHeight: 1.4 }}>
-                        <strong>Direct Browser Automation</strong>: Uses a patched Chromium instance. Once started, a browser window will open, autofill your credentials, solve security questions automatically, and check OFC slots. You only need to solve the CAPTCHA code.
+              <fieldset disabled={role === 'viewer'} style={{ border: 'none', padding: 0, margin: 0 }}>
+                <div className="settings-grid">
+                  
+                  {/* Engine Specific Options */}
+                  {formConfig.engine === 'browser' ? (
+                    <>
+                      <div className="form-group full-width">
+                        <div style={{ background: 'rgba(99, 102, 241, 0.08)', border: '1px solid rgba(99, 102, 241, 0.2)', padding: '0.85rem', borderRadius: '0.5rem', fontSize: '0.8rem', color: '#a5b4fc', lineHeight: 1.4 }}>
+                          <strong>Direct Browser Automation</strong>: Uses a patched Chromium instance. Once started, a browser window will open, autofill your credentials, solve security questions automatically, and check OFC slots. You only need to solve the CAPTCHA code.
+                        </div>
                       </div>
-                    </div>
 
-                    <div className="form-group">
-                      <label>Applicant Name (Group member match)</label>
-                      <input
-                        type="text"
-                        placeholder="e.g. JOHN DOE (matches table row exactly)"
-                        value={formConfig.applicantName}
-                        onChange={(e) => setFormConfig({ ...formConfig, applicantName: e.target.value })}
-                      />
-                    </div>
-
-                    <div className="form-group">
-                      <label>Login Timeout (seconds)</label>
-                      <input
-                        type="number"
-                        min="60"
-                        value={formConfig.loginTimeoutSeconds}
-                        onChange={(e) => setFormConfig({ ...formConfig, loginTimeoutSeconds: parseInt(e.target.value) || 600 })}
-                      />
-                    </div>
-
-                    <div className="form-group">
-                      <label>Portal Username / Email</label>
-                      <input
-                        type="text"
-                        placeholder="Portal Username"
-                        value={formConfig.portalUsername || ""}
-                        onChange={(e) => setFormConfig({ ...formConfig, portalUsername: e.target.value })}
-                      />
-                    </div>
-
-                     <div className="form-group">
-                       <label>Portal Password</label>
-                       <input
-                         type="password"
-                         placeholder="Portal Password"
-                         value={formConfig.portalPassword || ""}
-                         onChange={(e) => setFormConfig({ ...formConfig, portalPassword: e.target.value })}
-                       />
-                     </div>
- 
-                     <div className="form-group full-width">
-                       <label>2Captcha API Key (Optional auto-login solver)</label>
-                       <input
-                         type="password"
-                         placeholder="Enter 2Captcha Key for auto CAPTCHA solving"
-                         value={formConfig.captchaApiKey || ""}
-                         onChange={(e) => setFormConfig({ ...formConfig, captchaApiKey: e.target.value })}
-                       />
-                     </div>
-
-                  </>
-                ) : (
-                  <>
-                    <div className="form-group full-width">
-                      <div style={{ background: 'rgba(139, 92, 246, 0.08)', border: '1px solid rgba(139, 92, 246, 0.2)', padding: '0.85rem', borderRadius: '0.5rem', fontSize: '0.8rem', color: '#c084fc', lineHeight: 1.4 }}>
-                        <strong>Silent API Monitor</strong>: Pulls crowdsourced slot data from the CheckVisaSlots platform. Requires no browser runtime. Enter your API key / Access Code below to query.
-                      </div>
-                    </div>
-
-                    <div className="form-group full-width">
-                      <label>CheckVisaSlots API Key / Access Code</label>
-                      <div className="input-container">
+                      <div className="form-group">
+                        <label>Applicant Name (Group member match)</label>
                         <input
-                          type="password"
-                          placeholder="Paste your checkvisaslots token here"
-                          value={formConfig.checkVisaSlotsApiKey}
-                          onChange={(e) => setFormConfig({ ...formConfig, checkVisaSlotsApiKey: e.target.value })}
+                          type="text"
+                          placeholder="e.g. JOHN DOE (matches table row exactly)"
+                          value={formConfig.applicantName}
+                          onChange={(e) => setFormConfig({ ...formConfig, applicantName: e.target.value })}
                         />
                       </div>
-                    </div>
 
-                  </>
-                )}
+                      <div className="form-group">
+                        <label>Login Timeout (seconds)</label>
+                        <input
+                          type="number"
+                          min="60"
+                          value={formConfig.loginTimeoutSeconds}
+                          onChange={(e) => setFormConfig({ ...formConfig, loginTimeoutSeconds: parseInt(e.target.value) || 600 })}
+                        />
+                      </div>
 
-                {/* Target VACs Selection */}
-                <div className="form-group full-width" style={{ marginTop: '0.5rem' }}>
-                  <label>Target OFC Consulates (Select to check)</label>
-                  <div className="checkbox-grid">
-                    {INDIA_VACs.map(city => {
-                      const isChecked = formConfig.ofcCities.includes(city);
-                      return (
-                        <label key={city} className={`checkbox-label ${isChecked ? 'checked' : ''}`}>
+                      <div className="form-group">
+                        <label>Portal Username / Email</label>
+                        <input
+                          type="text"
+                          placeholder="Portal Username"
+                          value={formConfig.portalUsername || ""}
+                          onChange={(e) => setFormConfig({ ...formConfig, portalUsername: e.target.value })}
+                        />
+                      </div>
+
+                       <div className="form-group">
+                         <label>Portal Password</label>
+                         <input
+                           type="password"
+                           placeholder="Portal Password"
+                           value={formConfig.portalPassword || ""}
+                           onChange={(e) => setFormConfig({ ...formConfig, portalPassword: e.target.value })}
+                         />
+                       </div>
+
+                       {/* Security Question Answers */}
+                       <div className="form-group full-width" style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '1.25rem', marginTop: '0.5rem' }}>
+                         <label style={{ color: '#818cf8', fontWeight: 700 }}>Security Question Answers (Autofill)</label>
+                       </div>
+
+                       <div className="form-group">
+                         <label>School / Education / College Answer</label>
+                         <input
+                           type="text"
+                           placeholder="e.g. High School or College name"
+                           value={formConfig.securitySchool || ""}
+                           onChange={(e) => setFormConfig({ ...formConfig, securitySchool: e.target.value })}
+                         />
+                       </div>
+
+                       <div className="form-group">
+                         <label>Car / Vehicle / Automobile Answer</label>
+                         <input
+                           type="text"
+                           placeholder="e.g. First car make/model"
+                           value={formConfig.securityCar || ""}
+                           onChange={(e) => setFormConfig({ ...formConfig, securityCar: e.target.value })}
+                         />
+                       </div>
+
+                       <div className="form-group">
+                         <label>Job / Work / Company / City Answer</label>
+                         <input
+                           type="text"
+                           placeholder="e.g. First job city or employer"
+                           value={formConfig.securityJob || ""}
+                           onChange={(e) => setFormConfig({ ...formConfig, securityJob: e.target.value })}
+                         />
+                       </div>
+
+                       <div className="form-group">
+                         <label>Food / Favorite Dish / Restaurant Answer</label>
+                         <input
+                           type="text"
+                           placeholder="e.g. Favorite food"
+                           value={formConfig.securityFood || ""}
+                           onChange={(e) => setFormConfig({ ...formConfig, securityFood: e.target.value })}
+                         />
+                       </div>
+   
+                       <div className="form-group full-width">
+                         <label>2Captcha API Key (Optional auto-login solver)</label>
+                         <input
+                           type="password"
+                           placeholder="Enter 2Captcha Key for auto CAPTCHA solving"
+                           value={formConfig.captchaApiKey || ""}
+                           onChange={(e) => setFormConfig({ ...formConfig, captchaApiKey: e.target.value })}
+                         />
+                       </div>
+
+                    </>
+                  ) : (
+                    <>
+                      <div className="form-group full-width">
+                        <div style={{ background: 'rgba(139, 92, 246, 0.08)', border: '1px solid rgba(139, 92, 246, 0.2)', padding: '0.85rem', borderRadius: '0.5rem', fontSize: '0.8rem', color: '#c084fc', lineHeight: 1.4 }}>
+                          <strong>Silent API Monitor</strong>: Pulls crowdsourced slot data from the CheckVisaSlots platform. Requires no browser runtime. Enter your API key / Access Code below to query.
+                        </div>
+                      </div>
+
+                      <div className="form-group full-width">
+                        <label>CheckVisaSlots API Key / Access Code</label>
+                        <div className="input-container">
                           <input
-                            type="checkbox"
-                            checked={isChecked}
-                            onChange={() => handleCityToggle(city)}
+                            type="password"
+                            placeholder="Paste your checkvisaslots token here"
+                            value={formConfig.checkVisaSlotsApiKey}
+                            onChange={(e) => setFormConfig({ ...formConfig, checkVisaSlotsApiKey: e.target.value })}
                           />
-                          <span className="checkbox-box"></span>
-                          {city}
-                        </label>
-                      );
-                    })}
+                        </div>
+                      </div>
+
+                    </>
+                  )}
+
+                  {/* Target VACs Selection */}
+                  <div className="form-group full-width" style={{ marginTop: '0.5rem' }}>
+                    <label>Target OFC Consulates (Select to check)</label>
+                    <div className="checkbox-grid">
+                      {INDIA_VACs.map(city => {
+                        const isChecked = formConfig.ofcCities.includes(city);
+                        return (
+                          <label key={city} className={`checkbox-label ${isChecked ? 'checked' : ''}`}>
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => handleCityToggle(city)}
+                            />
+                            <span className="checkbox-box"></span>
+                            {city}
+                          </label>
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
 
-                {/* Telegram Settings */}
-                <div className="form-group full-width" style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '1.25rem', marginTop: '0.5rem' }}>
-                  <label style={{ color: '#818cf8', fontWeight: 700 }}>Telegram Notification Settings</label>
-                </div>
+                  {/* Telegram Settings */}
+                  <div className="form-group full-width" style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '1.25rem', marginTop: '0.5rem' }}>
+                    <label style={{ color: '#818cf8', fontWeight: 700 }}>Telegram Notification Settings</label>
+                  </div>
 
-                <div className="form-group">
-                  <label>Bot Token</label>
-                  <input
-                    type="password"
-                    placeholder="Enter Telegram Bot Token"
-                    value={formConfig.telegramToken}
-                    onChange={(e) => setFormConfig({ ...formConfig, telegramToken: e.target.value })}
-                  />
-                </div>
+                  <div className="form-group">
+                    <label>Bot Token</label>
+                    <input
+                      type="password"
+                      placeholder="Enter Telegram Bot Token"
+                      value={formConfig.telegramToken}
+                      onChange={(e) => setFormConfig({ ...formConfig, telegramToken: e.target.value })}
+                    />
+                  </div>
 
-                <div className="form-group">
-                  <label>Chat ID</label>
-                  <input
-                    type="text"
-                    placeholder="Enter Telegram Chat ID"
-                    value={formConfig.telegramChatId}
-                    onChange={(e) => setFormConfig({ ...formConfig, telegramChatId: e.target.value })}
-                  />
-                </div>
+                  <div className="form-group">
+                    <label>Chat ID</label>
+                    <input
+                      type="text"
+                      placeholder="Enter Chat ID (e.g. -100xxx)"
+                      value={formConfig.telegramChatId}
+                      onChange={(e) => setFormConfig({ ...formConfig, telegramChatId: e.target.value })}
+                    />
+                  </div>
 
-                {/* Email (SMTP) Settings */}
-                <div className="form-group full-width" style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '1.25rem', marginTop: '0.5rem' }}>
-                  <label style={{ color: '#818cf8', fontWeight: 700 }}>SMTP Email Settings (Optional)</label>
-                </div>
+                  {/* Google OAuth Authentication Settings */}
+                  <div className="form-group full-width" style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '1.25rem', marginTop: '0.5rem' }}>
+                    <label style={{ color: '#818cf8', fontWeight: 700 }}>Google Authentication Settings</label>
+                  </div>
 
-                <div className="form-group">
-                  <label>SMTP Host</label>
-                  <input
-                    type="text"
-                    placeholder="smtp.gmail.com"
-                    value={formConfig.emailSmtpHost}
-                    onChange={(e) => setFormConfig({ ...formConfig, emailSmtpHost: e.target.value })}
-                  />
-                </div>
+                  <div className="form-group">
+                    <label>Google Client ID</label>
+                    <input
+                      type="text"
+                      placeholder="Enter Google Client ID"
+                      value={formConfig.googleClientId || ''}
+                      onChange={(e) => setFormConfig({ ...formConfig, googleClientId: e.target.value })}
+                    />
+                  </div>
 
-                <div className="form-group">
-                  <label>SMTP Port</label>
-                  <input
-                    type="number"
-                    value={formConfig.emailSmtpPort}
-                    onChange={(e) => setFormConfig({ ...formConfig, emailSmtpPort: parseInt(e.target.value) || 587 })}
-                  />
-                </div>
+                  <div className="form-group">
+                    <label>Google Client Secret</label>
+                    <input
+                      type="password"
+                      placeholder="Enter Google Client Secret"
+                      value={formConfig.googleClientSecret || ''}
+                      onChange={(e) => setFormConfig({ ...formConfig, googleClientSecret: e.target.value })}
+                    />
+                  </div>
 
-                <div className="form-group">
-                  <label>SMTP Username / User Email</label>
-                  <input
-                    type="text"
-                    placeholder="example@gmail.com"
-                    value={formConfig.emailSmtpUser}
-                    onChange={(e) => setFormConfig({ ...formConfig, emailSmtpUser: e.target.value })}
-                  />
-                </div>
+                  {/* Submit Panel */}
+                  {role !== 'viewer' && (
+                    <div className="form-group full-width" style={{ marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                      <button type="submit" disabled={isOffline} className="btn btn-primary" style={{ width: '100%' }}>
+                        <IconSave /> Save All Configurations
+                      </button>
 
-                <div className="form-group">
-                  <label>SMTP Password / App Key</label>
-                  <input
-                    type="password"
-                    placeholder="Gmail App Password"
-                    value={formConfig.emailSmtpPass}
-                    onChange={(e) => setFormConfig({ ...formConfig, emailSmtpPass: e.target.value })}
-                  />
-                </div>
-
-                <div className="form-group full-width">
-                  <label>Recipient Email Alert Destination</label>
-                  <input
-                    type="text"
-                    placeholder="alert-destination@domain.com"
-                    value={formConfig.emailTo}
-                    onChange={(e) => setFormConfig({ ...formConfig, emailTo: e.target.value })}
-                  />
-                </div>
-
-                {/* Submit Panel */}
-                <div className="form-group full-width" style={{ marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                  <button type="submit" disabled={isOffline} className="btn btn-primary" style={{ width: '100%' }}>
-                    <IconSave /> Save All Configurations
-                  </button>
-
-                  {saveStatus.message && (
-                    <div style={{
-                      padding: '0.5rem',
-                      fontSize: '0.8rem',
-                      borderRadius: '0.25rem',
-                      textAlign: 'center',
-                      background: saveStatus.type === 'success' ? 'rgba(16,185,129,0.1)' : 'rgba(99,102,241,0.1)',
-                      color: saveStatus.type === 'success' ? 'var(--success)' : '#a5b4fc',
-                      border: `1px solid ${saveStatus.type === 'success' ? 'rgba(16,185,129,0.2)' : 'rgba(99,102,241,0.2)'}`
-                    }}>
-                      {saveStatus.message}
+                      {saveStatus.message && (
+                        <div style={{
+                          padding: '0.5rem',
+                          fontSize: '0.8rem',
+                          borderRadius: '0.25rem',
+                          textAlign: 'center',
+                          background: saveStatus.type === 'success' ? 'rgba(16,185,129,0.1)' : 'rgba(99,102,241,0.1)',
+                          color: saveStatus.type === 'success' ? 'var(--success)' : '#a5b4fc',
+                          border: `1px solid ${saveStatus.type === 'success' ? 'rgba(16,185,129,0.2)' : 'rgba(99,102,241,0.2)'}`
+                        }}>
+                          {saveStatus.message}
+                        </div>
+                      )}
                     </div>
                   )}
+
                 </div>
-
-              </div>
+              </fieldset>
             </form>
-          </div>
 
-          {/* Test Notifications card */}
-          <div className="glass-card">
-            <div className="card-title">
-              <IconBell /> Test Alert Routing
-            </div>
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.775rem', marginBottom: '1rem', lineHeight: 1.4 }}>
-              Instantly test if your alert configurations are functional by triggering dummy notifications.
-            </p>
-            
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem', marginBottom: alertStatus.message ? '0.75rem' : '0' }}>
-              <button onClick={() => handleTestAlert('desktop')} disabled={isOffline} className="btn btn-secondary" style={{ fontSize: '0.75rem', padding: '0.6rem 0.25rem' }}>
-                macOS Sound
-              </button>
-              <button onClick={() => handleTestAlert('telegram')} disabled={isOffline || !formConfig.telegramToken} className="btn btn-secondary" style={{ fontSize: '0.75rem', padding: '0.6rem 0.25rem' }}>
-                Telegram Bot
-              </button>
-              <button onClick={() => handleTestAlert('email')} disabled={isOffline || !formConfig.emailSmtpHost} className="btn btn-secondary" style={{ fontSize: '0.75rem', padding: '0.6rem 0.25rem' }}>
-                SMTP Email
-              </button>
-            </div>
+             {/* User Management Section (Admin Only) */}
+            {role === 'admin' && (
+              <div style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '1.5rem', marginTop: '1.5rem' }}>
+                <h3 style={{ color: '#818cf8', fontWeight: 700, fontSize: '0.95rem', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <IconSettings /> Authorized Users
+                  </span>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                    Total: {Object.keys(formConfig.allowedEmails || {}).length}
+                  </span>
+                </h3>
+                <div style={{ background: 'rgba(255,255,255,0.02)', padding: '1rem', borderRadius: '0.5rem', border: '1px solid var(--border-glass)' }}>
+                  
+                  {/* List existing allowed emails */}
+                  {Object.keys(formConfig.allowedEmails || {}).length === 0 ? (
+                    <p style={{ fontSize: '0.8rem', color: '#94a3b8', margin: '0 0 1rem 0' }}>No extra users registered yet. Add emails below.</p>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1rem', maxHeight: '150px', overflowY: 'auto', paddingRight: '6px' }}>
+                      {Object.entries(formConfig.allowedEmails).map(([emailAddr, userRole]) => {
+                        const r = typeof userRole === 'object' ? userRole.role : userRole;
+                        return (
+                          <div key={emailAddr} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.03)', padding: '0.4rem 0.6rem', borderRadius: '0.25rem', fontSize: '0.8rem' }}>
+                            <span>{emailAddr} <strong style={{ color: r === 'admin' ? '#818cf8' : '#fbbf24', fontSize: '0.75rem' }}>({r})</strong></span>
+                            <button 
+                              type="button" 
+                              onClick={() => {
+                                const updatedEmails = { ...formConfig.allowedEmails };
+                                delete updatedEmails[emailAddr];
+                                const newConfig = { ...formConfig, allowedEmails: updatedEmails };
+                                setFormConfig(newConfig);
+                                setTimeout(() => {
+                                  authedFetch(`${API_BASE}/config`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify(newConfig)
+                                  });
+                                }, 100);
+                              }}
+                              style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', padding: '2px 6px', fontSize: '0.75rem' }}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
 
-            {alertStatus.message && (
-              <div style={{
-                padding: '0.5rem',
-                fontSize: '0.8rem',
-                borderRadius: '0.25rem',
-                textAlign: 'center',
-                background: alertStatus.type === 'success' ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
-                color: alertStatus.type === 'success' ? 'var(--success)' : '#f87171',
-                border: `1px solid ${alertStatus.type === 'success' ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)'}`
-              }}>
-                {alertStatus.message}
+                  {/* Add user form */}
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <input 
+                      type="email" 
+                      placeholder="friend@gmail.com" 
+                      value={userEmailInput}
+                      onChange={(e) => setUserEmailInput(e.target.value)}
+                      style={{ flex: 1, padding: '0.4rem 0.6rem', fontSize: '0.8rem', borderRadius: '0.25rem', border: '1px solid var(--border-glass)', background: 'rgba(0,0,0,0.2)', color: '#fff' }}
+                    />
+                    <select 
+                      value={userRoleInput}
+                      onChange={(e) => setUserRoleInput(e.target.value)}
+                      style={{ padding: '0.4rem 0.6rem', fontSize: '0.8rem', borderRadius: '0.25rem', border: '1px solid var(--border-glass)', background: 'rgba(0,0,0,0.2)', color: '#fff' }}
+                    >
+                      <option value="viewer">Viewer</option>
+                      <option value="admin">Admin</option>
+                    </select>
+                    <button 
+                      type="button"
+                      onClick={() => {
+                        if (!userEmailInput.trim() || !userEmailInput.includes('@')) return;
+                        const updatedEmails = { ...formConfig.allowedEmails, [userEmailInput.trim()]: userRoleInput };
+                        const newConfig = { ...formConfig, allowedEmails: updatedEmails };
+                        setFormConfig(newConfig);
+                        setUserEmailInput('');
+                        setTimeout(() => {
+                          authedFetch(`${API_BASE}/config`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(newConfig)
+                          });
+                        }, 100);
+                      }}
+                      className="btn btn-secondary" 
+                      style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
+                    >
+                      Add
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
           </div>
+
+          {/* Test Notifications card */}
+          {role !== 'viewer' && (
+            <div className="glass-card">
+              <div className="card-title">
+                <IconBell /> Test Alert Routing
+              </div>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.775rem', marginBottom: '1rem', lineHeight: 1.4 }}>
+                Instantly test if your alert configurations are functional by triggering dummy notifications.
+              </p>
+              
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.75rem', marginBottom: alertStatus.message ? '0.75rem' : '0' }}>
+                <button onClick={() => handleTestAlert('desktop')} disabled={isOffline} className="btn btn-secondary" style={{ fontSize: '0.75rem', padding: '0.6rem 0.1rem' }}>
+                  macOS Sound
+                </button>
+                <button onClick={() => handleTestAlert('telegram')} disabled={isOffline || !formConfig.telegramToken} className="btn btn-secondary" style={{ fontSize: '0.75rem', padding: '0.6rem 0.1rem' }}>
+                  Telegram Bot
+                </button>
+              </div>
+
+              {alertStatus.message && (
+                <div style={{
+                  padding: '0.5rem',
+                  fontSize: '0.8rem',
+                  borderRadius: '0.25rem',
+                  textAlign: 'center',
+                  background: alertStatus.type === 'success' ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
+                  color: alertStatus.type === 'success' ? 'var(--success)' : '#f87171',
+                  border: `1px solid ${alertStatus.type === 'success' ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)'}`
+                }}>
+                  {alertStatus.message}
+                </div>
+              )}
+            </div>
+          )}
         </section>
 
         {/* Right Column: Live Status, Log output, and History */}
@@ -653,7 +950,11 @@ export default function App() {
                 <span>app.log</span>
               </div>
               <div className="terminal-body" ref={terminalBodyRef}>
-                {logs.length > 0 ? (
+                {role === 'viewer' ? (
+                  <div style={{ color: '#f87171', fontStyle: 'italic', padding: '1.5rem', textAlign: 'center' }}>
+                    Access to raw application logs is restricted to Administrator accounts.
+                  </div>
+                ) : logs.length > 0 ? (
                   logs.map((log, idx) => (
                     <div key={idx} className="log-line">{log}</div>
                   ))
