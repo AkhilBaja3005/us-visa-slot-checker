@@ -647,10 +647,9 @@ async function handleAutoLoginHelper(page) {
 }
 
 async function waitForLoginAsync(page, timeoutSeconds) {
-  const timeoutMs = (timeoutSeconds || 600) * 1000;
-  const startTime = Date.now();
   let reachedLoginPage = false;
   let lastLogUrl = "";
+  let lastScreenshotTime = 0;
   
   // Give a small wait for the initial redirect to b2clogin.com to begin
   try {
@@ -659,17 +658,20 @@ async function waitForLoginAsync(page, timeoutSeconds) {
     return;
   }
   
-  while (Date.now() - startTime < timeoutMs) {
+  while (true) {
     if (!activeBrowser) {
       logMsg("Login waiting canceled – browser was closed.");
       return;
     }
     
     try {
-      try {
-        await page.screenshot({ path: path.join(rootDir, 'current_page.png') });
-      } catch (screenshotErr) {
-        // Ignore screenshot failures
+      if (Date.now() - lastScreenshotTime > 10000) {
+        try {
+          await page.screenshot({ path: path.join(rootDir, 'current_page.png') });
+          lastScreenshotTime = Date.now();
+        } catch (screenshotErr) {
+          // Ignore screenshot failures
+        }
       }
       const url = page.url();
       let hostname = "";
@@ -939,9 +941,13 @@ async function runBrowserCycle() {
       triggerDesktopNotification("US Visa Action Required", "Please complete the portal login flow.");
       sendTelegram("🤖 <b>Visa Monitor</b>: Awaiting portal login in Chromium window.", config.telegramToken, config.telegramChatId);
       
-      await activePage.goto(HOME_URL);
+      try {
+        await activePage.goto(HOME_URL, { waitUntil: 'commit', timeout: 30000 });
+      } catch (gotoErr) {
+        logMsg(`Initial page load redirected or challenged: ${gotoErr.message}. Launching background solver...`);
+      }
       
-      // Async poll for login
+      // Async poll for login (this runs the Turnstile solver loop)
       waitForLoginAsync(activePage, config.loginTimeoutSeconds);
       return;
     } catch (err) {
@@ -960,22 +966,49 @@ async function runBrowserCycle() {
     return;
   }
 
+  // If in waiting room, check if the queue is still present without performing a page reload
+  if (monitorState.status === "waiting_room") {
+    const title = await activePage.title().catch(() => "");
+    const url = activePage.url() || "";
+    const isWaiting = title.includes("You are now in line") || title.includes("Waiting Room") || url.includes("cf_chl") || title.includes("Just a moment") || (await activePage.locator('text=You are now in line').count() > 0);
+    
+    if (isWaiting) {
+      logMsg("Still in the Cloudflare queue / Waiting Room. Letting it load...");
+      return;
+    } else {
+      logMsg("Cloudflare queue / Waiting Room cleared! Checking session status...");
+      monitorState.status = "running";
+    }
+  }
+
   // Load the OFC scheduling page once to start the checking process and check session validity
   logMsg("Loading OFC scheduling page...");
   try {
     const response = await activePage.goto(OFC_SCHEDULE_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
     
+    await activePage.waitForTimeout(2000);
+
+    const url = activePage.url() || "";
+    const title = await activePage.title().catch(() => "");
+    
+    // Detect Cloudflare Turnstile / Managed Challenge page
+    const isCloudflare = (response && response.status() === 403) || url.includes("cf_chl") || title.includes("Just a moment") || title.includes("Cloudflare");
+    if (isCloudflare) {
+      logMsg("Cloudflare challenge page detected. Launching Turnstile solver loop...");
+      monitorState.status = "awaiting_relogin";
+      waitForLoginAsync(activePage, config.loginTimeoutSeconds);
+      return;
+    }
+
     // Check if the response returned an HTTP error status (4xx or 5xx)
     if (response && response.status() >= 400) {
       throw new Error(`Server returned HTTP status ${response.status()}`);
     }
 
-    await activePage.waitForTimeout(2000);
-
-    const title = await activePage.title().catch(() => "");
     const isWaitingRoom = title.includes("You are now in line") || title.includes("Waiting Room") || (await activePage.locator('text=You are now in line').count() > 0);
     if (isWaitingRoom) {
       logMsg("Waiting Room / Queue detected. Waiting for line to clear...");
+      monitorState.status = "waiting_room";
       return; // Retry on the next cycle, keep the browser open
     }
     
@@ -1658,6 +1691,15 @@ app.post('/api/config', authenticateToken, requireAdmin, (req, res) => {
   const originalJwtSecret = config.jwtSecret;
   config = { ...config, ...req.body };
   
+  // Enforce minimum check intervals to prevent account lockouts and IP bans
+  if (config.engine === "browser") {
+    config.checkIntervalSeconds = Math.max(config.checkIntervalSeconds || 900, 900); // 15 minutes minimum
+  } else if (config.engine === "only_login") {
+    config.checkIntervalSeconds = Math.max(config.checkIntervalSeconds || 300, 300); // 5 minutes minimum
+  } else if (config.engine === "api") {
+    config.checkIntervalSeconds = Math.max(config.checkIntervalSeconds || 180, 180); // 3 minutes minimum
+  }
+
   // Do not allow editing isActive directly via this config update endpoint to avoid race conditions
   config.isActive = originalActive; 
   config.jwtSecret = originalJwtSecret;
