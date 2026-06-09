@@ -690,11 +690,12 @@ async function waitForLoginAsync(page, timeoutSeconds) {
         // Fallback if URL is about:blank
       }
       
-      // Success criteria: If we are already on the OFC scheduling page and it loaded successfully, exit early
-      if (url.includes('/ofc-schedule')) {
-        const loggedInIndicator = page.locator('text=Sign Out, text=Logout, text=Dashboard, #schedule-appointment, select');
+      // Success criteria: If we are on any portal page and it loaded successfully with logged-in indicators, exit early
+      const isUsvisaPage = url.includes('usvisascheduling.com');
+      if (isUsvisaPage && !hostname.includes(LOGIN_DOMAIN)) {
+        const loggedInIndicator = page.locator('text=Sign Out, text=Logout, text=Dashboard, #schedule-appointment, select, .username, a[href*="logout" i], a[href*="signout" i]');
         if (await loggedInIndicator.count() > 0) {
-          logMsg("Detected active OFC scheduling page. Exiting login loop immediately!");
+          logMsg("Detected active authenticated portal session page. Exiting login loop immediately!");
           monitorState.status = "running";
           setTimeout(runCycle, 2000);
           return;
