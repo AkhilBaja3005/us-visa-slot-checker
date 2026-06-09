@@ -693,7 +693,7 @@ async function waitForLoginAsync(page, timeoutSeconds) {
       // Success criteria: If we are on any portal page and it loaded successfully with logged-in indicators, exit early
       const isUsvisaPage = url.includes('usvisascheduling.com');
       if (isUsvisaPage && !hostname.includes(LOGIN_DOMAIN)) {
-        const loggedInIndicator = page.locator('text=Sign Out, text=Logout, text=Dashboard, #schedule-appointment, select, .username, a[href*="logout" i], a[href*="signout" i]');
+        const loggedInIndicator = page.locator('text=Sign Out, text=Sign out, text=Logout, text=Dashboard, #schedule-appointment, select, .username, a[href*="logout" i], a[href*="signout" i], a[href*="logoff" i], a[title*="sign out" i]');
         if (await loggedInIndicator.count() > 0) {
           logMsg("Detected active authenticated portal session page. Exiting login loop immediately!");
           monitorState.status = "running";
