@@ -1412,6 +1412,7 @@ async function triggerLocalBrowserLaunch(dbConfigData) {
     // Reset the flag in Supabase immediately so we don't double-trigger
     const updatedData = { ...dbConfigData };
     updatedData.slots_detected = false;
+    logMsg("[Supabase Listener] Resetting slots_detected flag to false in Supabase...");
     await supabase
       .from('us_visa_config')
       .update({ data: updatedData })
