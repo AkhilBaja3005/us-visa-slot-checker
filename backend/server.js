@@ -282,6 +282,7 @@ const HOME_URL = "https://www.usvisascheduling.com/en-US/";
 const OFC_SCHEDULE_URL = "https://www.usvisascheduling.com/en-US/ofc-schedule/";
 const LOGIN_DOMAIN = "atlasauth.b2clogin.com";
 
+let caffeinateProcess = null;
 let activeBrowser = null;
 let activeContext = null;
 let activePage = null;
@@ -1365,15 +1366,13 @@ function startSupabaseListener() {
         filter: 'id=eq.1'
       },
       async (payload) => {
-        if (config.isActive) return;
-        
         let data = payload.new && payload.new.data;
         if (typeof data === 'string') {
           try { data = JSON.parse(data); } catch (e) {}
         }
         if (data && data.slots_detected === true) {
-          logMsg("[Supabase Realtime] Slots detected by Cloud! Launching local browser in Login Only mode...");
-          await triggerLocalBrowserLaunch(data);
+          logMsg("[Supabase Realtime] Slots detected by Cloud!");
+          await handleSlotsDetectedNotification(data);
         }
       }
     )
@@ -1383,7 +1382,6 @@ function startSupabaseListener() {
 
   // 2. Fallback Polling (Every 10 seconds) in case Realtime replication is disabled in Supabase dashboard
   const pollCheck = async () => {
-    if (config.isActive) return;
     try {
       const { data: dbData } = await supabase
         .from('us_visa_config')
@@ -1397,8 +1395,8 @@ function startSupabaseListener() {
           try { rawData = JSON.parse(rawData); } catch (e) {}
         }
         if (rawData && rawData.slots_detected === true) {
-          logMsg("[Supabase Poll Fallback] Slots detected by Cloud! Launching local browser in Login Only mode...");
-          await triggerLocalBrowserLaunch(rawData);
+          logMsg("[Supabase Poll Fallback] Slots detected by Cloud!");
+          await handleSlotsDetectedNotification(rawData);
         }
       }
     } catch (err) {
@@ -1413,13 +1411,47 @@ function startSupabaseListener() {
   setInterval(pollCheck, 10000);
 }
 
-// Helper to trigger the browser launch and clean up the flag in Supabase
-async function triggerLocalBrowserLaunch(dbConfigData) {
+// Global helper to handle slots detected state, switching from only_login to active browser if needed
+async function handleSlotsDetectedNotification(dbConfigData) {
   try {
     // Reset the flag in Supabase immediately so we don't double-trigger
     const updatedData = { ...dbConfigData };
     updatedData.slots_detected = false;
-    logMsg("[Supabase Listener] Resetting slots_detected flag to false in Supabase...");
+    logMsg("[Supabase Trigger] Resetting slots_detected flag to false in Supabase...");
+    await supabase
+      .from('us_visa_config')
+      .update({ data: updatedData })
+      .eq('id', 1);
+
+    if (config.isActive) {
+      // If we are already running
+      if (config.engine === "only_login") {
+        logMsg("[Supabase Trigger] Switch detected: Session is currently in Login Only mode. Upgrading to Browser Auto mode to scan slots...");
+        config.engine = "browser";
+        saveConfig();
+        sendTelegram(`🚀 <b>Auto-Trigger:</b> Cloud detected slots! Upgrading local session from <b>Login Only</b> to <b>Browser Auto</b>...`, config.telegramToken, config.telegramChatId);
+        
+        // Trigger check cycle immediately
+        runBrowserCycle().catch(err => logMsg(`Auto-upgraded browser cycle error: ${err.message}`));
+      } else {
+        logMsg("[Supabase Trigger] Monitor is already running in active slot-scanning mode. Skipping upgrade.");
+      }
+    } else {
+      // If stopped, launch browser in Login Only mode to keep it alive
+      logMsg("[Supabase Trigger] Local instance stopped. Launching browser in Login Only mode to await manual login...");
+      await triggerLocalBrowserLaunch(dbConfigData);
+    }
+  } catch (err) {
+    logMsg(`[Supabase Trigger] Error during slots notification handling: ${err.message}`);
+  }
+}
+
+// Helper to trigger the browser launch and clean up the flag in Supabase
+async function triggerLocalBrowserLaunch(dbConfigData) {
+  try {
+    // Reset the flag in Supabase immediately so we don't double-trigger (fallback fallback)
+    const updatedData = { ...dbConfigData };
+    updatedData.slots_detected = false;
     await supabase
       .from('us_visa_config')
       .update({ data: updatedData })
@@ -1444,6 +1476,24 @@ function startScheduler() {
   logMsg("Starting background scheduler loop...");
   config.isActive = true;
   saveConfig();
+
+  // Prevent sleep on macOS when running browser or login mode
+  if (process.platform === 'darwin' && (config.engine === 'browser' || config.engine === 'only_login')) {
+    try {
+      const { spawn } = require('child_process');
+      if (caffeinateProcess) {
+        caffeinateProcess.kill();
+        caffeinateProcess = null;
+      }
+      logMsg("Preventing Mac sleep mode via caffeinate...");
+      caffeinateProcess = spawn('caffeinate', ['-di']);
+      caffeinateProcess.on('error', (err) => {
+        logMsg(`Failed to start caffeinate: ${err.message}`);
+      });
+    } catch (caffErr) {
+      logMsg(`Error initializing caffeinate: ${caffErr.message}`);
+    }
+  }
   
   // Set up hourly stat counters
   hourlyChecksCount = 0;
@@ -1523,6 +1573,17 @@ function stopScheduler() {
   monitorState.status = "stopped";
   logMsg("Background scheduler stopped.");
   cleanupBrowser();
+
+  // Restore sleep mode on macOS
+  if (caffeinateProcess) {
+    try {
+      logMsg("Restoring normal Mac sleep behavior...");
+      caffeinateProcess.kill();
+    } catch (killErr) {
+      logMsg(`Error killing caffeinate process: ${killErr.message}`);
+    }
+    caffeinateProcess = null;
+  }
 }
 
 
