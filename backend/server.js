@@ -227,6 +227,11 @@ async function saveHistory(record) {
 // ── Notification Helpers ───────────────────────────────────────────────────
 
 function sendTelegram(message, token, chatId) {
+  if (process.env.DEV_MODE === "true") {
+    logMsg(`[Telegram] [DEV_MODE] Alert skipped: ${message.replace(/<[^>]*>/g, '')}`);
+    return;
+  }
+
   if (!token || !chatId || token.includes("YOUR_") || chatId.includes("YOUR_")) {
     logMsg("[Telegram] Alert skipped (credentials not configured).");
     return;
