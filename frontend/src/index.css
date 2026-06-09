@@ -32,6 +32,102 @@
   --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
 }
 
+/* Light Theme Variables and Overrides */
+html.light {
+  --bg-dark: #f8fafc;
+  --bg-deep: #f1f5f9;
+  --bg-card: rgba(255, 255, 255, 0.85);
+  --border-glass: rgba(0, 0, 0, 0.08);
+  --border-focus: rgba(99, 102, 241, 0.6);
+  
+  --text-main: #0f172a;
+  --text-muted: #475569;
+  --text-dark: #94a3b8;
+}
+
+html.light body {
+  background-color: var(--bg-dark);
+  background-image: 
+    radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.05) 0px, transparent 50%),
+    radial-gradient(at 100% 100%, rgba(139, 92, 246, 0.05) 0px, transparent 50%),
+    radial-gradient(at 50% 50%, rgba(248, 250, 252, 1) 0px, rgba(241, 245, 249, 0.95) 100%);
+}
+
+html.light .title-area h1 {
+  background: linear-gradient(to right, #0f172a, #4f46e5);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+html.light input[type="text"], html.light input[type="password"], html.light input[type="number"], html.light select {
+  background: rgba(255, 255, 255, 0.9);
+  color: #0f172a;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+html.light input:focus, html.light select:focus {
+  background: #ffffff;
+}
+
+html.light .checkbox-label {
+  background: rgba(0, 0, 0, 0.02);
+}
+
+html.light .checkbox-label:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+html.light .engine-tabs {
+  background: rgba(0, 0, 0, 0.04);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+html.light .engine-tab {
+  color: #475569;
+}
+
+html.light .engine-tab.active {
+  color: #ffffff;
+}
+
+html.light .slot-card {
+  background: rgba(255, 255, 255, 0.6);
+}
+
+html.light .slot-card.unknown {
+  opacity: 0.8;
+}
+
+html.light .terminal {
+  background: #f1f5f9;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+html.light .terminal-header {
+  background: rgba(0, 0, 0, 0.02);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+html.light .terminal-body {
+  background: #f8fafc;
+  color: #0284c7;
+}
+
+html.light .history-table tr:hover td {
+  background: rgba(0, 0, 0, 0.02);
+}
+
+html.light .btn-secondary {
+  background: rgba(0, 0, 0, 0.02);
+  color: #0f172a;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+html.light .btn-secondary:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+
 * {
   box-sizing: border-box;
   margin: 0;

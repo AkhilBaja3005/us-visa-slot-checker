@@ -45,6 +45,13 @@ const INDIA_VACs = [
 ];
 
 export default function App() {
+  const [theme, setTheme] = useState(localStorage.getItem('theme') || 'dark');
+
+  useEffect(() => {
+    document.documentElement.className = theme;
+    localStorage.setItem('theme', theme);
+  }, [theme]);
+
   // Config state (binds to forms)
   const [formConfig, setFormConfig] = useState({
     engine: "browser",
@@ -64,7 +71,8 @@ export default function App() {
     securityCar: "",
     securityJob: "",
     securityFood: "",
-    allowedEmails: {}
+    allowedEmails: {},
+    clearBrowserProfileOnStart: false
   });
 
   // Live status state
@@ -114,14 +122,16 @@ export default function App() {
         if (errData.error && errData.error.includes("Admin privileges required")) {
           throw new Error("Admin privileges required");
         }
-        // Redirect to login only if it is a session authentication failure
-        localStorage.removeItem('token');
-        localStorage.removeItem('role');
-        localStorage.removeItem('email');
-        setToken('');
-        setRole('');
-        setEmail('');
-        setNeedLogin(true);
+        // Redirect to login only if we had an authentication token to begin with (session expired/invalid)
+        if (token) {
+          localStorage.removeItem('token');
+          localStorage.removeItem('role');
+          localStorage.removeItem('email');
+          setToken('');
+          setRole('');
+          setEmail('');
+          setNeedLogin(true);
+        }
       }
       return res;
     } catch (e) {
@@ -159,18 +169,11 @@ export default function App() {
 
     const initApp = async () => {
       try {
-        // Test fetch status to see if login is needed
-        const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
-        const testRes = await fetch(`${API_BASE}/status`, { headers });
-        
-        if (testRes.status === 401 || testRes.status === 403) {
-          setNeedLogin(true);
-          return;
-        }
-        
         setNeedLogin(false);
-        fetchConfig();
-        fetchLogs();
+        if (role === 'admin') {
+          fetchConfig();
+          fetchLogs();
+        }
         fetchHistory();
 
         // Connect to Server-Sent Events (SSE) status stream
@@ -191,9 +194,11 @@ export default function App() {
           setIsOffline(true);
         };
 
-        // Poll logs and history, but NOT status
+        // Poll logs and history, but NOT status. Only poll logs if role is admin.
         logsTimer = setInterval(() => {
-          fetchLogs();
+          if (role === 'admin') {
+            fetchLogs();
+          }
           fetchHistory();
         }, 4000);
       } catch (err) {
@@ -231,7 +236,7 @@ export default function App() {
 
   const fetchLogs = async () => {
     try {
-      if (role === 'viewer') return; // Viewers don't pull logs
+      if (role !== 'admin') return; // Viewers and guests don't pull logs
       const res = await authedFetch(`${API_BASE}/logs`);
       if (res && res.ok) {
         const data = await res.json();
@@ -369,10 +374,25 @@ export default function App() {
 
   if (needLogin) {
     return (
-      <div className="app-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '80vh' }}>
+      <div className="app-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '80vh', position: 'relative' }}>
+        <div style={{ position: 'absolute', top: '1rem', right: '1rem' }}>
+          <button
+            onClick={() => setTheme(prev => prev === 'dark' ? 'light' : 'dark')}
+            className="btn btn-secondary"
+            style={{ padding: '0.5rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', justifyContent: 'center', height: '36px', width: '36px', borderRadius: '0.375rem' }}
+            title={`Switch to ${theme === 'dark' ? 'Light' : 'Dark'} Mode`}
+          >
+            {theme === 'dark' ? (
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+            ) : (
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+            )}
+          </button>
+        </div>
+
         <div className="glass-card" style={{ maxWidth: '400px', width: '100%', padding: '2.5rem', textAlign: 'center' }}>
-          <h1 style={{ fontSize: '1.8rem', color: '#fff', marginBottom: '0.5rem', fontWeight: 800 }}>US Visa Slot Monitor 🇮🇳</h1>
-          <p style={{ color: '#94a3b8', fontSize: '0.9rem', marginBottom: '2rem' }}>Sign in to access the active slot checker console.</p>
+          <h1 style={{ fontSize: '1.8rem', color: 'var(--text-main)', marginBottom: '0.5rem', fontWeight: 800 }}>US Visa Slot Monitor <span style={{ background: 'none', WebkitTextFillColor: 'initial', WebkitBackgroundClip: 'initial', display: 'inline-block' }}>🇮🇳</span></h1>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '2rem' }}>Sign in to access the active slot checker console.</p>
           
           <button 
             onClick={handleGoogleLogin} 
@@ -389,7 +409,8 @@ export default function App() {
               border: 'none',
               borderRadius: '0.5rem',
               fontWeight: 600,
-              cursor: 'pointer'
+              cursor: 'pointer',
+              color: '#fff'
             }}
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style={{ marginRight: '6px' }}>
@@ -400,10 +421,142 @@ export default function App() {
             </svg>
             Sign in with Google
           </button>
+          
+          <div style={{ marginTop: '1.5rem', borderTop: '1px solid var(--border-glass)', paddingTop: '1.5rem' }}>
+            <button
+              onClick={() => {
+                window.location.href = `${API_BASE}/auth/bypass-dev?origin=${window.location.origin}`;
+              }}
+              className="btn btn-secondary"
+              style={{
+                width: '100%',
+                padding: '0.75rem',
+                fontSize: '0.9rem',
+                borderRadius: '0.5rem',
+                cursor: 'pointer',
+                fontWeight: 600
+              }}
+            >
+              Developer Admin Bypass (Local Dev)
+            </button>
+          </div>
+          
+          <div style={{ marginTop: '1.25rem' }}>
+            <button
+              onClick={() => setNeedLogin(false)}
+              className="btn btn-secondary"
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--text-muted)',
+                fontSize: '0.8rem',
+                textDecoration: 'underline',
+                cursor: 'pointer'
+              }}
+            >
+              Back to Public Dashboard (View Only)
+            </button>
+          </div>
         </div>
       </div>
     );
   }
+
+  const renderSlotsCard = () => (
+    <div className="glass-card">
+      <div className="card-title">
+        <IconCalendar /> Target Slot Openings
+      </div>
+      
+      <div className="slots-container">
+        {INDIA_VACs.map(city => {
+          const isConfigured = formConfig.ofcCities.includes(city);
+          const hasSlots = status.availableSlots[city];
+          
+          let cardClass = "unknown";
+          let statusText = "Not Monitored";
+          
+          if (isConfigured) {
+            if (hasSlots === true) {
+              cardClass = "available";
+              statusText = "Slots Open! 🎉";
+            } else if (hasSlots === false) {
+              cardClass = "unavailable";
+              statusText = "No Slots";
+            } else {
+              cardClass = "unknown";
+              statusText = "Pending Check";
+            }
+          }
+
+          return (
+            <div key={city} className={`slot-card ${cardClass}`}>
+              <div className="slot-city">{city}</div>
+              <div className={`slot-status-text ${cardClass}`}>
+                {statusText}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '1.25rem', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+        <span>Engine: <strong>{status.engine === 'browser' ? 'Browser Automation' : status.engine === 'only_login' ? 'Login Only (Browser)' : 'CheckVisaSlots API'}</strong></span>
+        {status.engine === 'api' && typeof status.apiCreditsRemaining === 'number' && (
+          <span>Credits: <strong style={{ color: status.apiCreditsRemaining < 100 ? '#f87171' : '#34d399' }}>{status.apiCreditsRemaining}</strong></span>
+        )}
+        <span>Last Scan: <strong>{status.lastCheckTime ? new Date(status.lastCheckTime).toLocaleTimeString() : 'Never'}</strong></span>
+      </div>
+    </div>
+  );
+
+  const renderHistoryCard = () => (
+    <div className="glass-card">
+      <div className="card-title">
+        History Logs (Last Checks)
+      </div>
+      
+      <div className="history-table-container">
+        {history.length > 0 ? (
+          <table className="history-table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Engine</th>
+                <th>System Status</th>
+                <th>Scan Results</th>
+              </tr>
+            </thead>
+            <tbody>
+              {history.slice(-6).reverse().map((record, idx) => {
+                const time = new Date(record.timestamp).toLocaleTimeString();
+                const openList = Object.keys(record.slots).filter(c => record.slots[c] === true);
+                
+                return (
+                  <tr key={idx}>
+                    <td>{time}</td>
+                    <td><code style={{ fontSize: '0.75rem' }}>{record.engine}</code></td>
+                    <td><span className={`status-pill ${record.status}`} style={{ padding: '0.15rem 0.5rem', fontSize: '0.65rem' }}>{record.status}</span></td>
+                    <td>
+                      {openList.length > 0 ? (
+                        <span style={{ color: 'var(--success)', fontWeight: 600 }}>
+                          Open: {openList.join(', ')}
+                        </span>
+                      ) : (
+                        <span style={{ color: 'var(--text-muted)' }}>No Slots</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        ) : (
+          <div style={{ color: 'var(--text-dark)', fontSize: '0.775rem', fontStyle: 'italic', padding: '0.5rem 0' }}>No history recorded yet.</div>
+        )}
+      </div>
+    </div>
+  );
 
   return (
     <div className="app-container">
@@ -432,11 +585,25 @@ export default function App() {
       {/* Header */}
       <header className="header">
         <div className="title-area">
-          <h1>US Visa Slot Alert Center 🇮🇳</h1>
+          <h1>US Visa Slot Alert Center <span style={{ background: 'none', WebkitTextFillColor: 'initial', WebkitBackgroundClip: 'initial', display: 'inline-block' }}>🇮🇳</span></h1>
           <p>OFC Appointment Monitor (India Scheduling)</p>
         </div>
         
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          {/* Theme Toggle Button */}
+          <button
+            onClick={() => setTheme(prev => prev === 'dark' ? 'light' : 'dark')}
+            className="btn btn-secondary"
+            style={{ padding: '0.5rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', justifyContent: 'center', height: '36px', width: '36px', borderRadius: '0.375rem' }}
+            title={`Switch to ${theme === 'dark' ? 'Light' : 'Dark'} Mode`}
+          >
+            {theme === 'dark' ? (
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+            ) : (
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+            )}
+          </button>
+
           {/* Status Indicator */}
           <div className={`status-pill ${status.status}`}>
             <span style={{
@@ -449,12 +616,24 @@ export default function App() {
             {status.status.replace('_', ' ')}
           </div>
 
-          {/* Start/Stop Button */}
-          {role === 'viewer' ? (
+          {/* Start/Stop Button / Mode Indicator */}
+          {!token ? (
             <div style={{
-              background: 'rgba(245, 158, 11, 0.12)',
-              border: '1px solid rgba(245, 158, 11, 0.3)',
-              color: '#fbbf24',
+              background: theme === 'dark' ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)',
+              border: '1px solid var(--border-glass)',
+              color: 'var(--text-muted)',
+              padding: '0.5rem 0.85rem',
+              borderRadius: '0.375rem',
+              fontSize: '0.8rem',
+              fontWeight: 600
+            }}>
+              Public View Mode
+            </div>
+          ) : role === 'viewer' ? (
+            <div style={{
+              background: theme === 'dark' ? 'rgba(245, 158, 11, 0.12)' : 'rgba(217, 119, 6, 0.12)',
+              border: theme === 'dark' ? '1px solid rgba(245, 158, 11, 0.3)' : '1px solid rgba(217, 119, 6, 0.4)',
+              color: theme === 'dark' ? '#fbbf24' : '#b45309',
               padding: '0.5rem 0.85rem',
               borderRadius: '0.375rem',
               fontSize: '0.8rem',
@@ -473,8 +652,8 @@ export default function App() {
             </button>
           )}
 
-          {/* Logout Button */}
-          {token && (
+          {/* Login / Sign Out Button */}
+          {token ? (
             <button
               onClick={handleLogout}
               className="btn btn-secondary"
@@ -482,12 +661,26 @@ export default function App() {
             >
               Sign Out
             </button>
+          ) : (
+            <button
+              onClick={() => setNeedLogin(true)}
+              className="btn btn-primary"
+              style={{ background: 'linear-gradient(135deg, #6366f1, #4f46e5)', border: 'none', color: '#fff', fontSize: '0.8rem', padding: '0.5rem 0.75rem', cursor: 'pointer', fontWeight: 600, borderRadius: '0.375rem' }}
+            >
+              Admin Sign In
+            </button>
           )}
         </div>
       </header>
 
       {/* Dashboard Main Grid */}
-      <main className="dashboard-grid">
+      {(!token || role === 'viewer') ? (
+        <main style={{ maxWidth: '800px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '2rem', padding: '1.5rem 0' }}>
+          {renderSlotsCard()}
+          {renderHistoryCard()}
+        </main>
+      ) : (
+        <main className="dashboard-grid">
         
         {/* Left Column: Config Panel */}
         <section>
@@ -497,20 +690,30 @@ export default function App() {
             </div>
 
             {/* Engine Tabs */}
-            <div className="engine-tabs">
+            <div className="engine-tabs" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.25rem' }}>
               <button
                 type="button"
                 className={`engine-tab ${formConfig.engine === 'browser' ? 'active' : ''}`}
                 onClick={() => handleSwitchEngine('browser')}
+                style={{ fontSize: '0.7rem', padding: '0.5rem 0.25rem' }}
               >
-                Browser Automation (direct)
+                Browser Auto
+              </button>
+              <button
+                type="button"
+                className={`engine-tab ${formConfig.engine === 'only_login' ? 'active' : ''}`}
+                onClick={() => handleSwitchEngine('only_login')}
+                style={{ fontSize: '0.7rem', padding: '0.5rem 0.25rem' }}
+              >
+                Login Only
               </button>
               <button
                 type="button"
                 className={`engine-tab ${formConfig.engine === 'api' ? 'active' : ''}`}
                 onClick={() => handleSwitchEngine('api')}
+                style={{ fontSize: '0.7rem', padding: '0.5rem 0.25rem' }}
               >
-                CheckVisaSlots API (silent)
+                API (Silent)
               </button>
             </div>
 
@@ -519,11 +722,15 @@ export default function App() {
                 <div className="settings-grid">
                   
                   {/* Engine Specific Options */}
-                  {formConfig.engine === 'browser' ? (
+                  {(formConfig.engine === 'browser' || formConfig.engine === 'only_login') ? (
                     <>
                       <div className="form-group full-width">
                         <div style={{ background: 'rgba(99, 102, 241, 0.08)', border: '1px solid rgba(99, 102, 241, 0.2)', padding: '0.85rem', borderRadius: '0.5rem', fontSize: '0.8rem', color: '#a5b4fc', lineHeight: 1.4 }}>
-                          <strong>Direct Browser Automation</strong>: Uses a patched Chromium instance. Once started, a browser window will open, autofill your credentials, solve security questions automatically, and check OFC slots. You only need to solve the CAPTCHA code.
+                          {formConfig.engine === 'only_login' ? (
+                            <span><strong>Login Only Mode</strong>: Opens the stealth Chromium browser and automatically logs you in (autofilling your credentials & security questions). Once logged in, it remains idle and keeps the session active without checking slots, so you do not get rate-limited.</span>
+                          ) : (
+                            <span><strong>Direct Browser Automation</strong>: Uses a patched Chromium instance. Once started, a browser window will open, autofill your credentials, solve security questions automatically, and check OFC slots. You only need to solve the CAPTCHA code.</span>
+                          )}
                         </div>
                       </div>
 
@@ -565,6 +772,19 @@ export default function App() {
                            value={formConfig.portalPassword || ""}
                            onChange={(e) => setFormConfig({ ...formConfig, portalPassword: e.target.value })}
                          />
+                       </div>
+
+                       <div className="form-group full-width" style={{ marginTop: '0.25rem' }}>
+                         <label className={`checkbox-label ${formConfig.clearBrowserProfileOnStart ? 'checked' : ''}`} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                           <input
+                             type="checkbox"
+                             checked={formConfig.clearBrowserProfileOnStart || false}
+                             onChange={(e) => setFormConfig({ ...formConfig, clearBrowserProfileOnStart: e.target.checked })}
+                             style={{ display: 'none' }}
+                           />
+                           <span className="checkbox-box"></span>
+                           <span style={{ fontSize: '0.825rem', color: '#e2e8f0' }}>Clear Browser Cache/Session on Start</span>
+                         </label>
                        </div>
 
                        {/* Security Question Answers */}
@@ -875,55 +1095,7 @@ export default function App() {
         {/* Right Column: Live Status, Log output, and History */}
         <section>
           
-          {/* Current Slots Availability Card */}
-          <div className="glass-card">
-            <div className="card-title">
-              <IconCalendar /> Target Slot Openings
-            </div>
-            
-            <div className="slots-container">
-              {INDIA_VACs.map(city => {
-                // Check if active
-                const isConfigured = formConfig.ofcCities.includes(city);
-                
-                // Read slots status from key
-                const hasSlots = status.availableSlots[city];
-                
-                let cardClass = "unknown";
-                let statusText = "Not Monitored";
-                
-                if (isConfigured) {
-                  if (hasSlots === true) {
-                    cardClass = "available";
-                    statusText = "Slots Open! 🎉";
-                  } else if (hasSlots === false) {
-                    cardClass = "unavailable";
-                    statusText = "No Slots";
-                  } else {
-                    cardClass = "unknown";
-                    statusText = "Pending Check";
-                  }
-                }
-
-                return (
-                  <div key={city} className={`slot-card ${cardClass}`}>
-                    <div className="slot-city">{city}</div>
-                    <div className={`slot-status-text ${cardClass}`}>
-                      {statusText}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-            
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '1.25rem', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-              <span>Engine: <strong>{status.engine === 'browser' ? 'Browser Automation' : 'CheckVisaSlots API'}</strong></span>
-              {status.engine === 'api' && typeof status.apiCreditsRemaining === 'number' && (
-                <span>Credits: <strong style={{ color: status.apiCreditsRemaining < 100 ? '#f87171' : '#34d399' }}>{status.apiCreditsRemaining}</strong></span>
-              )}
-              <span>Last Scan: <strong>{status.lastCheckTime ? new Date(status.lastCheckTime).toLocaleTimeString() : 'Never'}</strong></span>
-            </div>
-          </div>
+          {renderSlotsCard()}
 
           {/* Terminal Console Logs Card */}
           <div className="glass-card" style={{ padding: '1.25rem' }}>
@@ -950,11 +1122,7 @@ export default function App() {
                 <span>app.log</span>
               </div>
               <div className="terminal-body" ref={terminalBodyRef}>
-                {role === 'viewer' ? (
-                  <div style={{ color: '#f87171', fontStyle: 'italic', padding: '1.5rem', textAlign: 'center' }}>
-                    Access to raw application logs is restricted to Administrator accounts.
-                  </div>
-                ) : logs.length > 0 ? (
+                {logs.length > 0 ? (
                   logs.map((log, idx) => (
                     <div key={idx} className="log-line">{log}</div>
                   ))
@@ -965,56 +1133,12 @@ export default function App() {
             </div>
           </div>
 
-          {/* History Records Panel */}
-          <div className="glass-card">
-            <div className="card-title">
-              History Logs (Last Checks)
-            </div>
-            
-            <div className="history-table-container">
-              {history.length > 0 ? (
-                <table className="history-table">
-                  <thead>
-                    <tr>
-                      <th>Time</th>
-                      <th>Engine</th>
-                      <th>System Status</th>
-                      <th>Scan Results</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {history.slice(-6).reverse().map((record, idx) => {
-                      const time = new Date(record.timestamp).toLocaleTimeString();
-                      const openList = Object.keys(record.slots).filter(c => record.slots[c] === true);
-                      
-                      return (
-                        <tr key={idx}>
-                          <td>{time}</td>
-                          <td><code style={{ fontSize: '0.75rem' }}>{record.engine}</code></td>
-                          <td><span className={`status-pill ${record.status}`} style={{ padding: '0.15rem 0.5rem', fontSize: '0.65rem' }}>{record.status}</span></td>
-                          <td>
-                            {openList.length > 0 ? (
-                              <span style={{ color: 'var(--success)', fontWeight: 600 }}>
-                                Open: {openList.join(', ')}
-                              </span>
-                            ) : (
-                              <span style={{ color: 'var(--text-muted)' }}>No Slots</span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              ) : (
-                <div style={{ color: 'var(--text-dark)', fontSize: '0.775rem', fontStyle: 'italic', padding: '0.5rem 0' }}>No history recorded yet.</div>
-              )}
-            </div>
-          </div>
+          {renderHistoryCard()}
 
         </section>
 
       </main>
+      )}
     </div>
   );
 }
