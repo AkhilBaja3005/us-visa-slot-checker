@@ -7,11 +7,18 @@ const { exec } = require('child_process');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
+const ws = require('ws');
 
 // Initialize Supabase if credentials are provided
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
-const supabase = (supabaseUrl && supabaseKey) ? createClient(supabaseUrl, supabaseKey) : null;
+const supabase = (supabaseUrl && supabaseKey) 
+  ? createClient(supabaseUrl, supabaseKey, {
+      realtime: {
+        transport: ws
+      }
+    }) 
+  : null;
 
 const app = express();
 const PORT = process.env.PORT || 8000;
