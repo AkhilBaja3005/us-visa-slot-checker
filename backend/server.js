@@ -8,6 +8,10 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 const ws = require('ws');
+const { chromium } = require('patchright');
+
+// Cache variable to avoid redundant Supabase updates for slots_detected status
+let cachedSlotsDetected = null;
 
 // Initialize Supabase if credentials are provided
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -873,8 +877,6 @@ async function runBrowserContributionCycle() {
 
 
 async function runBrowserCycle() {
-  const { chromium } = require('patchright');
-
   // Launch browser if not running
   if (!activeBrowser) {
     monitorState.status = "starting";
@@ -1198,7 +1200,7 @@ async function runApiCycle() {
       sendTelegram(`🤖 <b>US Visa Slots Open (API Tracker)</b>\n\n${citiesLines}\n\n🕐 <b>Checked at:</b> ${timeStr}\n👉 <a href="https://www.usvisascheduling.com/en-US/">Book Now</a>`, config.telegramToken, config.telegramChatId);
       sendEmail("US Visa Slots Open Alert (API)", textMsg, config);
 
-      if (supabase) {
+      if (supabase && cachedSlotsDetected !== true) {
         logMsg("Slots found via API! Writing slots_detected flag to Supabase for local listener...");
         try {
           const { data: dbData } = await supabase.from('us_visa_config').select('data').eq('id', 1).single();
@@ -1209,6 +1211,7 @@ async function runApiCycle() {
           const currentData = { ...rawData };
           currentData.slots_detected = true;
           await supabase.from('us_visa_config').update({ data: currentData }).eq('id', 1);
+          cachedSlotsDetected = true;
         } catch (err) {
           logMsg(`Failed to write slots_detected to Supabase: ${err.message}`);
         }
@@ -1224,7 +1227,7 @@ async function runApiCycle() {
       }
     } else {
       logMsg("No slots detected in CheckVisaSlots data.");
-      if (supabase) {
+      if (supabase && cachedSlotsDetected !== false) {
         try {
           const { data: dbData } = await supabase.from('us_visa_config').select('data').eq('id', 1).single();
           if (dbData && dbData.data) {
@@ -1239,6 +1242,7 @@ async function runApiCycle() {
               await supabase.from('us_visa_config').update({ data: currentData }).eq('id', 1);
             }
           }
+          cachedSlotsDetected = false;
         } catch (err) {
           // Ignore silently
         }
@@ -1337,6 +1341,9 @@ async function runCycle() {
       slots: { ...monitorState.availableSlots }
     };
     historyLogs.push(record);
+    if (historyLogs.length > 1000) {
+      historyLogs = historyLogs.slice(-1000);
+    }
     saveHistory();
   }
 }

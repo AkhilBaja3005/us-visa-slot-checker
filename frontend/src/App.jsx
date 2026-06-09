@@ -166,6 +166,26 @@ export default function App() {
   useEffect(() => {
     let eventSource = null;
     let logsTimer = null;
+    let currentInterval = 4000;
+
+    const setupTimer = (intervalMs) => {
+      if (logsTimer) clearInterval(logsTimer);
+      logsTimer = setInterval(() => {
+        if (role === 'admin') {
+          fetchLogs();
+        }
+        fetchHistory();
+      }, intervalMs);
+    };
+
+    const handleVisibilityChange = () => {
+      const isHidden = document.visibilityState === 'hidden';
+      const newInterval = isHidden ? 15000 : 4000;
+      if (newInterval !== currentInterval) {
+        currentInterval = newInterval;
+        setupTimer(currentInterval);
+      }
+    };
 
     const initApp = async () => {
       try {
@@ -195,12 +215,8 @@ export default function App() {
         };
 
         // Poll logs and history, but NOT status. Only poll logs if role is admin.
-        logsTimer = setInterval(() => {
-          if (role === 'admin') {
-            fetchLogs();
-          }
-          fetchHistory();
-        }, 4000);
+        setupTimer(currentInterval);
+        document.addEventListener('visibilitychange', handleVisibilityChange);
       } catch (err) {
         setIsOffline(true);
       }
@@ -211,8 +227,9 @@ export default function App() {
     return () => {
       if (eventSource) eventSource.close();
       if (logsTimer) clearInterval(logsTimer);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [token]);
+  }, [token, role]);
 
   // Auto-scroll logs terminal container only
   useEffect(() => {
