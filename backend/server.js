@@ -690,6 +690,17 @@ async function waitForLoginAsync(page, timeoutSeconds) {
         // Fallback if URL is about:blank
       }
       
+      // Success criteria: If we are already on the OFC scheduling page and it loaded successfully, exit early
+      if (url.includes('/ofc-schedule')) {
+        const loggedInIndicator = page.locator('text=Sign Out, text=Logout, text=Dashboard, #schedule-appointment, select');
+        if (await loggedInIndicator.count() > 0) {
+          logMsg("Detected active OFC scheduling page. Exiting login loop immediately!");
+          monitorState.status = "running";
+          setTimeout(runCycle, 2000);
+          return;
+        }
+      }
+
       const title = await page.title().catch(() => "");
       const isWaitingRoom = title.includes("You are now in line") || title.includes("Waiting Room") || (await page.locator('text=You are now in line').count() > 0);
       const isCloudflare = url.includes("cf_chl") || title.includes("Just a moment") || title.includes("Cloudflare") || isWaitingRoom;
