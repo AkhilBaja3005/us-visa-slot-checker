@@ -21,6 +21,7 @@ const supabase = (supabaseUrl && supabaseKey)
   : null;
 
 const app = express();
+app.set('trust proxy', true);
 const PORT = process.env.PORT || 8000;
 
 // Enable CORS and JSON body parsing
