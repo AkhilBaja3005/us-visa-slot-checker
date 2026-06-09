@@ -119,7 +119,11 @@ async function loadConfig() {
       }
       
       if (dbData && dbData.data) {
-        const dbConfigData = { ...dbData.data };
+        let rawData = dbData.data;
+        if (typeof rawData === 'string') {
+          try { rawData = JSON.parse(rawData); } catch (e) {}
+        }
+        const dbConfigData = { ...rawData };
         delete dbConfigData.engine; // Ignore engine from Supabase
         config = { ...config, ...dbConfigData };
         logMsg("Configuration loaded from Supabase (ignoring engine field).");
@@ -1194,12 +1198,15 @@ async function runApiCycle() {
       sendTelegram(`🤖 <b>US Visa Slots Open (API Tracker)</b>\n\n${citiesLines}\n\n🕐 <b>Checked at:</b> ${timeStr}\n👉 <a href="https://www.usvisascheduling.com/en-US/">Book Now</a>`, config.telegramToken, config.telegramChatId);
       sendEmail("US Visa Slots Open Alert (API)", textMsg, config);
 
-      // Write slots_detected = true to Supabase so the local listener gets triggered
       if (supabase) {
         logMsg("Slots found via API! Writing slots_detected flag to Supabase for local listener...");
         try {
           const { data: dbData } = await supabase.from('us_visa_config').select('data').eq('id', 1).single();
-          const currentData = dbData && dbData.data ? dbData.data : {};
+          let rawData = dbData && dbData.data ? dbData.data : {};
+          if (typeof rawData === 'string') {
+            try { rawData = JSON.parse(rawData); } catch (e) {}
+          }
+          const currentData = { ...rawData };
           currentData.slots_detected = true;
           await supabase.from('us_visa_config').update({ data: currentData }).eq('id', 1);
         } catch (err) {
@@ -1220,11 +1227,17 @@ async function runApiCycle() {
       if (supabase) {
         try {
           const { data: dbData } = await supabase.from('us_visa_config').select('data').eq('id', 1).single();
-          if (dbData && dbData.data && dbData.data.slots_detected) {
-            logMsg("Cleaning stale slots_detected flag in Supabase...");
-            const currentData = { ...dbData.data };
-            delete currentData.slots_detected;
-            await supabase.from('us_visa_config').update({ data: currentData }).eq('id', 1);
+          if (dbData && dbData.data) {
+            let rawData = dbData.data;
+            if (typeof rawData === 'string') {
+              try { rawData = JSON.parse(rawData); } catch (e) {}
+            }
+            if (rawData && rawData.slots_detected) {
+              logMsg("Cleaning stale slots_detected flag in Supabase...");
+              const currentData = { ...rawData };
+              currentData.slots_detected = false;
+              await supabase.from('us_visa_config').update({ data: currentData }).eq('id', 1);
+            }
           }
         } catch (err) {
           // Ignore silently
@@ -1347,7 +1360,10 @@ function startSupabaseListener() {
       async (payload) => {
         if (config.isActive) return;
         
-        const data = payload.new && payload.new.data;
+        let data = payload.new && payload.new.data;
+        if (typeof data === 'string') {
+          try { data = JSON.parse(data); } catch (e) {}
+        }
         if (data && data.slots_detected === true) {
           logMsg("[Supabase Realtime] Slots detected by Cloud! Launching local browser in Login Only mode...");
           await triggerLocalBrowserLaunch(data);
@@ -1358,25 +1374,36 @@ function startSupabaseListener() {
       logMsg(`[Supabase Realtime] Subscription status: ${status}`);
     });
 
-  // 2. Fallback Polling (Every 60 seconds) in case Realtime replication is disabled in Supabase dashboard
-  setInterval(async () => {
+  // 2. Fallback Polling (Every 10 seconds) in case Realtime replication is disabled in Supabase dashboard
+  const pollCheck = async () => {
     if (config.isActive) return;
-    
     try {
-      const { data: dbData, error } = await supabase
+      const { data: dbData } = await supabase
         .from('us_visa_config')
         .select('data')
         .eq('id', 1)
         .single();
         
-      if (dbData && dbData.data && dbData.data.slots_detected === true) {
-        logMsg("[Supabase Poll Fallback] Slots detected by Cloud! Launching local browser in Login Only mode...");
-        await triggerLocalBrowserLaunch(dbData.data);
+      if (dbData && dbData.data) {
+        let rawData = dbData.data;
+        if (typeof rawData === 'string') {
+          try { rawData = JSON.parse(rawData); } catch (e) {}
+        }
+        if (rawData && rawData.slots_detected === true) {
+          logMsg("[Supabase Poll Fallback] Slots detected by Cloud! Launching local browser in Login Only mode...");
+          await triggerLocalBrowserLaunch(rawData);
+        }
       }
     } catch (err) {
-      // Ignore network blips
+      // Ignore network errors
     }
-  }, 60000);
+  };
+
+  // Run once immediately on startup
+  pollCheck();
+  
+  // Set interval to poll every 10 seconds
+  setInterval(pollCheck, 10000);
 }
 
 // Helper to trigger the browser launch and clean up the flag in Supabase
@@ -1384,7 +1411,7 @@ async function triggerLocalBrowserLaunch(dbConfigData) {
   try {
     // Reset the flag in Supabase immediately so we don't double-trigger
     const updatedData = { ...dbConfigData };
-    delete updatedData.slots_detected;
+    updatedData.slots_detected = false;
     await supabase
       .from('us_visa_config')
       .update({ data: updatedData })
