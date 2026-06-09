@@ -422,24 +422,26 @@ export default function App() {
             Sign in with Google
           </button>
           
-          <div style={{ marginTop: '1.5rem', borderTop: '1px solid var(--border-glass)', paddingTop: '1.5rem' }}>
-            <button
-              onClick={() => {
-                window.location.href = `${API_BASE}/auth/bypass-dev?origin=${window.location.origin}`;
-              }}
-              className="btn btn-secondary"
-              style={{
-                width: '100%',
-                padding: '0.75rem',
-                fontSize: '0.9rem',
-                borderRadius: '0.5rem',
-                cursor: 'pointer',
-                fontWeight: 600
-              }}
-            >
-              Developer Admin Bypass (Local Dev)
-            </button>
-          </div>
+          { (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && (
+            <div style={{ marginTop: '1.5rem', borderTop: '1px solid var(--border-glass)', paddingTop: '1.5rem' }}>
+              <button
+                onClick={() => {
+                  window.location.href = `${API_BASE}/auth/bypass-dev?origin=${window.location.origin}`;
+                }}
+                className="btn btn-secondary"
+                style={{
+                  width: '100%',
+                  padding: '0.75rem',
+                  fontSize: '0.9rem',
+                  borderRadius: '0.5rem',
+                  cursor: 'pointer',
+                  fontWeight: 600
+                }}
+              >
+                Developer Admin Bypass (Local Dev)
+              </button>
+            </div>
+          )}
           
           <div style={{ marginTop: '1.25rem' }}>
             <button

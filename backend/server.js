@@ -1535,6 +1535,12 @@ function requireAdmin(req, res, next) {
 // ── Google OAuth Endpoints ──────────────────────────────────────────────────
 
 app.get('/api/auth/bypass-dev', (req, res) => {
+  const host = req.get('host') || '';
+  const isLocal = host.includes('localhost') || host.includes('127.0.0.1');
+  if (!isLocal) {
+    return res.status(403).json({ error: "Developer Admin Bypass is only allowed in local development." });
+  }
+
   const email = "akhilkumarbaja@gmail.com";
   const role = "admin";
   const token = jwt.sign(
