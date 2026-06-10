@@ -86,6 +86,8 @@ let monitorState = {
   apiCreditsRemaining: null
 };
 
+let lastOFCPageRefreshTime = 0;
+
 // Log Message Helper
 function logMsg(message) {
   const ts = new Date().toLocaleString();
@@ -835,6 +837,7 @@ async function runBrowserContributionCycle() {
   const { chromium } = require('patchright');
   const userDataDir = path.join(rootDir, 'browser_profile');
   const extensionPath = path.join(__dirname, 'extension');
+  const autofillExtensionPath = path.join(__dirname, 'autofill-extension');
 
   let browserContext = null;
   let page = null;
@@ -846,8 +849,8 @@ async function runBrowserContributionCycle() {
       slowMo: 50,
       viewport: { width: 1280, height: 800 },
       args: [
-        `--disable-extensions-except=${extensionPath}`,
-        `--load-extension=${extensionPath}`,
+        `--disable-extensions-except=${extensionPath},${autofillExtensionPath}`,
+        `--load-extension=${extensionPath},${autofillExtensionPath}`,
         '--disable-features=IsolateOrigins,site-per-process,BlockThirdPartyCookies'
       ]
     });
@@ -895,6 +898,7 @@ async function runBrowserCycle() {
     try {
       const userDataDir = path.join(rootDir, 'browser_profile');
       const extensionPath = path.join(__dirname, 'extension');
+      const autofillExtensionPath = path.join(__dirname, 'autofill-extension');
 
       if (config.clearBrowserProfileOnStart && fs.existsSync(userDataDir)) {
         logMsg("Clearing persistent browser profile on startup as configured...");
@@ -910,8 +914,8 @@ async function runBrowserCycle() {
         slowMo: 50,
         viewport: { width: 1280, height: 800 },
         args: [
-          `--disable-extensions-except=${extensionPath}`,
-          `--load-extension=${extensionPath}`,
+          `--disable-extensions-except=${extensionPath},${autofillExtensionPath}`,
+          `--load-extension=${extensionPath},${autofillExtensionPath}`,
           '--disable-features=IsolateOrigins,site-per-process,BlockThirdPartyCookies'
         ]
       });
@@ -1006,15 +1010,25 @@ async function runBrowserCycle() {
     
     let response = null;
     if (isAlreadyOnOFC) {
-      logMsg("Browser is already on the OFC Scheduling page. Skipping page load/reload.");
       if (config.engine === "only_login") {
-        monitorState.status = "running";
-        logMsg("[Login Only Mode] Session is active and verified on OFC page. Staying idle.");
-        return;
+        const timeSinceLastRefresh = Date.now() - lastOFCPageRefreshTime;
+        if (timeSinceLastRefresh < 240000) { // 4 minutes (240,000 ms)
+          monitorState.status = "running";
+          logMsg(`[Login Only Mode] Session is active on OFC page. Skipping refresh (last refreshed ${Math.round(timeSinceLastRefresh / 1000)}s ago).`);
+          return;
+        } else {
+          logMsg("[Login Only Mode] 4 minutes elapsed. Refreshing page to renew short-lived Cloudflare and session cookies (ppuid, __cf_bm, __cfwaitingroom)...");
+          response = await activePage.goto(OFC_SCHEDULE_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+          lastOFCPageRefreshTime = Date.now();
+          await activePage.waitForTimeout(2000);
+        }
+      } else {
+        logMsg("Browser is already on the OFC Scheduling page. Skipping page load/reload.");
       }
     } else {
       logMsg("Loading OFC scheduling page...");
       response = await activePage.goto(OFC_SCHEDULE_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      lastOFCPageRefreshTime = Date.now();
       await activePage.waitForTimeout(2000);
     }
     
@@ -1844,6 +1858,21 @@ app.post('/api/config', authenticateToken, requireAdmin, (req, res) => {
   res.json({ message: "Configuration updated successfully", config });
 });
 
+app.get('/api/extension/credentials', (req, res) => {
+  const isLocal = req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1' || req.connection.remoteAddress === '127.0.0.1' || req.connection.remoteAddress === '::1';
+  if (!isLocal) {
+    return res.status(403).json({ error: "Access denied. Only localhost requests allowed." });
+  }
+  res.json({
+    portalUsername: config.portalUsername || "",
+    portalPassword: config.portalPassword || "",
+    securitySchool: config.securitySchool || "",
+    securityCar: config.securityCar || "",
+    securityJob: config.securityJob || "",
+    securityFood: config.securityFood || "",
+  });
+});
+
 app.get('/api/status', (req, res) => {
   res.json(getCurrentStatus());
 });
@@ -1958,20 +1987,6 @@ async function initApp() {
     } catch (caffErr) {
       logMsg(`Error initializing caffeinate: ${caffErr.message}`);
     }
-  }
-
-  if (!fs.existsSync(rootDir)) {
-    fs.mkdirSync(rootDir, { recursive: true });
-  }
-  await loadConfig();
-  await loadHistory();
-  if (!fs.existsSync(logFilePath)) {
-    fs.writeFileSync(logFilePath, `[${new Date().toLocaleString()}] US Visa Slot Tracker Logs Initialized.\n`, 'utf8');
-  }
-
-  // Auto-start scheduler if configured active
-  if (config.isActive) {
-    startScheduler();
   }
 
   // Only start Supabase listener locally (not on Render cloud)
