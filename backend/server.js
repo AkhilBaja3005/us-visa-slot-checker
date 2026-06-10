@@ -1011,17 +1011,26 @@ async function runBrowserCycle() {
     let response = null;
     if (isAlreadyOnOFC) {
       if (config.engine === "only_login") {
-        const timeSinceLastRefresh = Date.now() - lastOFCPageRefreshTime;
-        if (timeSinceLastRefresh < 240000) { // 4 minutes (240,000 ms)
-          monitorState.status = "running";
-          logMsg(`[Login Only Mode] Session is active on OFC page. Skipping refresh (last refreshed ${Math.round(timeSinceLastRefresh / 1000)}s ago).`);
-          return;
-        } else {
-          logMsg("[Login Only Mode] 4 minutes elapsed. Refreshing page to renew short-lived Cloudflare and session cookies (ppuid, __cf_bm, __cfwaitingroom)...");
-          response = await activePage.goto(OFC_SCHEDULE_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        monitorState.status = "running";
+        
+        // Silent session keep-alive ping instead of page reload
+        const timeSinceLastPing = Date.now() - lastOFCPageRefreshTime;
+        if (timeSinceLastPing >= 240000) { // 4 minutes
+          logMsg("[Login Only Mode] Sending silent background session-ping to keep cookies warm without reloading page...");
+          const pingStatus = await activePage.evaluate(async () => {
+            try {
+              const res = await fetch('/en-US/custom-actions/?route=/api/v1/schedule-group/get-family-ofc-schedule-days', { method: 'POST' });
+              return res.status;
+            } catch (err) {
+              return 'failed';
+            }
+          }).catch(() => 'error');
+          logMsg(`[Login Only Mode] Silent session-ping completed. Status code: ${pingStatus}`);
           lastOFCPageRefreshTime = Date.now();
-          await activePage.waitForTimeout(2000);
+        } else {
+          logMsg(`[Login Only Mode] Session active on OFC page. Skipping session-ping (last pinged ${Math.round(timeSinceLastPing / 1000)}s ago).`);
         }
+        return;
       } else {
         logMsg("Browser is already on the OFC Scheduling page. Skipping page load/reload.");
       }

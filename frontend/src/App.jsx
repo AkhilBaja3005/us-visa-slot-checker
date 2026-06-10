@@ -47,6 +47,8 @@ const INDIA_VACs = [
 export default function App() {
   const [theme, setTheme] = useState(localStorage.getItem('theme') || 'dark');
 
+  const [activeMobileTab, setActiveMobileTab] = useState('status');
+
   useEffect(() => {
     document.documentElement.className = theme;
     localStorage.setItem('theme', theme);
@@ -159,6 +161,78 @@ export default function App() {
       window.location.href = '/';
     }
   }, []);
+
+  // Request notification permission on mount
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }, []);
+
+  // Watch for slot openings and trigger notifications / audio alerts
+  const prevAvailableSlots = useRef({});
+  useEffect(() => {
+    if (!status.availableSlots) return;
+
+    // Detect if any city has switched from false/pending to true (slots open)
+    const newlyOpenCities = [];
+    Object.entries(status.availableSlots).forEach(([city, isOpen]) => {
+      const wasOpen = prevAvailableSlots.current[city];
+      if (isOpen === true && wasOpen !== true) {
+        newlyOpenCities.push(city);
+      }
+    });
+
+    if (newlyOpenCities.length > 0) {
+      // Trigger browser notification
+      if ('Notification' in window && Notification.permission === 'granted') {
+        newlyOpenCities.forEach(city => {
+          new Notification("US Visa Slot Open!", {
+            body: `Slots are OPEN in ${city}! 🎉`,
+            requireInteraction: true
+          });
+        });
+      }
+
+      // Play audio alert (synthesized triple beep)
+      try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const playBeep = (delay, frequency) => {
+          const osc = audioCtx.createOscillator();
+          const gain = audioCtx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(frequency, audioCtx.currentTime + delay);
+          gain.gain.setValueAtTime(0.5, audioCtx.currentTime + delay);
+          gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + delay + 0.3);
+          osc.connect(gain);
+          gain.connect(audioCtx.destination);
+          osc.start(audioCtx.currentTime + delay);
+          osc.stop(audioCtx.currentTime + delay + 0.4);
+        };
+        playBeep(0, 880);
+        playBeep(0.4, 880);
+        playBeep(0.8, 880);
+      } catch (e) {
+        console.error("Audio play failed:", e);
+      }
+    }
+
+    prevAvailableSlots.current = { ...status.availableSlots };
+  }, [status.availableSlots]);
+
+  const requestNotificationPermission = () => {
+    if ('Notification' in window) {
+      Notification.requestPermission().then(permission => {
+        if (permission === 'granted') {
+          new Notification("Notifications Enabled!", {
+            body: "You will receive alerts here when visa slots open."
+          });
+        }
+      });
+    } else {
+      alert("This browser does not support desktop notifications.");
+    }
+  };
 
 
 
@@ -483,8 +557,19 @@ export default function App() {
 
   const renderSlotsCard = () => (
     <div className="glass-card">
-      <div className="card-title">
-        <IconCalendar /> Target Slot Openings
+      <div className="card-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <IconCalendar /> Target Slot Openings
+        </span>
+        {'Notification' in window && Notification.permission !== 'granted' && (
+          <button 
+            onClick={requestNotificationPermission}
+            className="btn-primary"
+            style={{ padding: '4px 10px', fontSize: '12px', width: 'auto' }}
+          >
+            🔔 Enable Notifications
+          </button>
+        )}
       </div>
       
       <div className="slots-container">
@@ -700,463 +785,481 @@ export default function App() {
         </main>
       ) : (
         <main className="dashboard-grid">
-        
-        {/* Left Column: Config Panel */}
-        <section>
-          <div className="glass-card">
-            <div className="card-title">
-              <IconSettings /> Engine Selection
-            </div>
-
-            {/* Engine Tabs */}
-            <div className="engine-tabs" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.25rem' }}>
-              <button
-                type="button"
-                className={`engine-tab ${formConfig.engine === 'browser' ? 'active' : ''}`}
-                onClick={() => handleSwitchEngine('browser')}
-                style={{ fontSize: '0.7rem', padding: '0.5rem 0.25rem' }}
-              >
-                Browser Auto
-              </button>
-              <button
-                type="button"
-                className={`engine-tab ${formConfig.engine === 'only_login' ? 'active' : ''}`}
-                onClick={() => handleSwitchEngine('only_login')}
-                style={{ fontSize: '0.7rem', padding: '0.5rem 0.25rem' }}
-              >
-                Login Only
-              </button>
-              <button
-                type="button"
-                className={`engine-tab ${formConfig.engine === 'api' ? 'active' : ''}`}
-                onClick={() => handleSwitchEngine('api')}
-                style={{ fontSize: '0.7rem', padding: '0.5rem 0.25rem' }}
-              >
-                API (Silent)
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveConfig}>
-              <fieldset disabled={role === 'viewer'} style={{ border: 'none', padding: 0, margin: 0 }}>
-                <div className="settings-grid">
-                  
-                  {/* Engine Specific Options */}
-                  {(formConfig.engine === 'browser' || formConfig.engine === 'only_login') ? (
-                    <>
-                      <div className="form-group full-width">
-                        <div style={{ background: 'rgba(99, 102, 241, 0.08)', border: '1px solid rgba(99, 102, 241, 0.2)', padding: '0.85rem', borderRadius: '0.5rem', fontSize: '0.8rem', color: '#a5b4fc', lineHeight: 1.4 }}>
-                          {formConfig.engine === 'only_login' ? (
-                            <span><strong>Login Only Mode</strong>: Opens the stealth Chromium browser and automatically logs you in (autofilling your credentials & security questions). Once logged in, it remains idle and keeps the session active without checking slots, so you do not get rate-limited.</span>
-                          ) : (
-                            <span><strong>Direct Browser Automation</strong>: Uses a patched Chromium instance. Once started, a browser window will open, autofill your credentials, solve security questions automatically, and check OFC slots. You only need to solve the CAPTCHA code.</span>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="form-group">
-                        <label>Applicant Name (Group member match)</label>
-                        <input
-                          type="text"
-                          placeholder="e.g. JOHN DOE (matches table row exactly)"
-                          value={formConfig.applicantName}
-                          onChange={(e) => setFormConfig({ ...formConfig, applicantName: e.target.value })}
-                        />
-                      </div>
-
-                      <div className="form-group">
-                        <label>Login Timeout (seconds)</label>
-                        <input
-                          type="number"
-                          min="60"
-                          value={formConfig.loginTimeoutSeconds}
-                          onChange={(e) => setFormConfig({ ...formConfig, loginTimeoutSeconds: parseInt(e.target.value) || 600 })}
-                        />
-                      </div>
-
-                      <div className="form-group">
-                        <label>Portal Username / Email</label>
-                        <input
-                          type="text"
-                          placeholder="Portal Username"
-                          value={formConfig.portalUsername || ""}
-                          onChange={(e) => setFormConfig({ ...formConfig, portalUsername: e.target.value })}
-                        />
-                      </div>
-
-                       <div className="form-group">
-                         <label>Portal Password</label>
-                         <input
-                           type="password"
-                           placeholder="Portal Password"
-                           value={formConfig.portalPassword || ""}
-                           onChange={(e) => setFormConfig({ ...formConfig, portalPassword: e.target.value })}
-                         />
-                       </div>
-
-                       <div className="form-group full-width" style={{ marginTop: '0.25rem' }}>
-                         <label className={`checkbox-label ${formConfig.clearBrowserProfileOnStart ? 'checked' : ''}`} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
-                           <input
-                             type="checkbox"
-                             checked={formConfig.clearBrowserProfileOnStart || false}
-                             onChange={(e) => setFormConfig({ ...formConfig, clearBrowserProfileOnStart: e.target.checked })}
-                             style={{ display: 'none' }}
-                           />
-                           <span className="checkbox-box"></span>
-                           <span style={{ fontSize: '0.825rem', color: '#e2e8f0' }}>Clear Browser Cache/Session on Start</span>
-                         </label>
-                       </div>
-
-                       {/* Security Question Answers */}
-                       <div className="form-group full-width" style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '1.25rem', marginTop: '0.5rem' }}>
-                         <label style={{ color: '#818cf8', fontWeight: 700 }}>Security Question Answers (Autofill)</label>
-                       </div>
-
-                       <div className="form-group">
-                         <label>School / Education / College Answer</label>
-                         <input
-                           type="text"
-                           placeholder="e.g. High School or College name"
-                           value={formConfig.securitySchool || ""}
-                           onChange={(e) => setFormConfig({ ...formConfig, securitySchool: e.target.value })}
-                         />
-                       </div>
-
-                       <div className="form-group">
-                         <label>Car / Vehicle / Automobile Answer</label>
-                         <input
-                           type="text"
-                           placeholder="e.g. First car make/model"
-                           value={formConfig.securityCar || ""}
-                           onChange={(e) => setFormConfig({ ...formConfig, securityCar: e.target.value })}
-                         />
-                       </div>
-
-                       <div className="form-group">
-                         <label>Job / Work / Company / City Answer</label>
-                         <input
-                           type="text"
-                           placeholder="e.g. First job city or employer"
-                           value={formConfig.securityJob || ""}
-                           onChange={(e) => setFormConfig({ ...formConfig, securityJob: e.target.value })}
-                         />
-                       </div>
-
-                       <div className="form-group">
-                         <label>Food / Favorite Dish / Restaurant Answer</label>
-                         <input
-                           type="text"
-                           placeholder="e.g. Favorite food"
-                           value={formConfig.securityFood || ""}
-                           onChange={(e) => setFormConfig({ ...formConfig, securityFood: e.target.value })}
-                         />
-                       </div>
-   
-                       <div className="form-group full-width">
-                         <label>2Captcha API Key (Optional auto-login solver)</label>
-                         <input
-                           type="password"
-                           placeholder="Enter 2Captcha Key for auto CAPTCHA solving"
-                           value={formConfig.captchaApiKey || ""}
-                           onChange={(e) => setFormConfig({ ...formConfig, captchaApiKey: e.target.value })}
-                         />
-                       </div>
-
-                    </>
-                  ) : (
-                    <>
-                      <div className="form-group full-width">
-                        <div style={{ background: 'rgba(139, 92, 246, 0.08)', border: '1px solid rgba(139, 92, 246, 0.2)', padding: '0.85rem', borderRadius: '0.5rem', fontSize: '0.8rem', color: '#c084fc', lineHeight: 1.4 }}>
-                          <strong>Silent API Monitor</strong>: Pulls crowdsourced slot data from the CheckVisaSlots platform. Requires no browser runtime. Enter your API key / Access Code below to query.
-                        </div>
-                      </div>
-
-                      <div className="form-group full-width">
-                        <label>CheckVisaSlots API Key / Access Code</label>
-                        <div className="input-container">
-                          <input
-                            type="password"
-                            placeholder="Paste your checkvisaslots token here"
-                            value={formConfig.checkVisaSlotsApiKey}
-                            onChange={(e) => setFormConfig({ ...formConfig, checkVisaSlotsApiKey: e.target.value })}
-                          />
-                        </div>
-                      </div>
-
-                    </>
-                  )}
-
-                  {/* Target VACs Selection */}
-                  <div className="form-group full-width" style={{ marginTop: '0.5rem' }}>
-                    <label>Target OFC Consulates (Select to check)</label>
-                    <div className="checkbox-grid">
-                      {INDIA_VACs.map(city => {
-                        const isChecked = formConfig.ofcCities.includes(city);
-                        return (
-                          <label key={city} className={`checkbox-label ${isChecked ? 'checked' : ''}`}>
-                            <input
-                              type="checkbox"
-                              checked={isChecked}
-                              onChange={() => handleCityToggle(city)}
-                            />
-                            <span className="checkbox-box"></span>
-                            {city}
-                          </label>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Telegram Settings */}
-                  <div className="form-group full-width" style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '1.25rem', marginTop: '0.5rem' }}>
-                    <label style={{ color: '#818cf8', fontWeight: 700 }}>Telegram Notification Settings</label>
-                  </div>
-
-                  <div className="form-group">
-                    <label>Bot Token</label>
-                    <input
-                      type="password"
-                      placeholder="Enter Telegram Bot Token"
-                      value={formConfig.telegramToken}
-                      onChange={(e) => setFormConfig({ ...formConfig, telegramToken: e.target.value })}
-                    />
-                  </div>
-
-                  <div className="form-group">
-                    <label>Chat ID</label>
-                    <input
-                      type="text"
-                      placeholder="Enter Chat ID (e.g. -100xxx)"
-                      value={formConfig.telegramChatId}
-                      onChange={(e) => setFormConfig({ ...formConfig, telegramChatId: e.target.value })}
-                    />
-                  </div>
-
-                  {/* Google OAuth Authentication Settings */}
-                  <div className="form-group full-width" style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '1.25rem', marginTop: '0.5rem' }}>
-                    <label style={{ color: '#818cf8', fontWeight: 700 }}>Google Authentication Settings</label>
-                  </div>
-
-                  <div className="form-group">
-                    <label>Google Client ID</label>
-                    <input
-                      type="text"
-                      placeholder="Enter Google Client ID"
-                      value={formConfig.googleClientId || ''}
-                      onChange={(e) => setFormConfig({ ...formConfig, googleClientId: e.target.value })}
-                    />
-                  </div>
-
-                  <div className="form-group">
-                    <label>Google Client Secret</label>
-                    <input
-                      type="password"
-                      placeholder="Enter Google Client Secret"
-                      value={formConfig.googleClientSecret || ''}
-                      onChange={(e) => setFormConfig({ ...formConfig, googleClientSecret: e.target.value })}
-                    />
-                  </div>
-
-                  {/* Submit Panel */}
-                  {role !== 'viewer' && (
-                    <div className="form-group full-width" style={{ marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                      <button type="submit" disabled={isOffline} className="btn btn-primary" style={{ width: '100%' }}>
-                        <IconSave /> Save All Configurations
-                      </button>
-
-                      {saveStatus.message && (
-                        <div style={{
-                          padding: '0.5rem',
-                          fontSize: '0.8rem',
-                          borderRadius: '0.25rem',
-                          textAlign: 'center',
-                          background: saveStatus.type === 'success' ? 'rgba(16,185,129,0.1)' : 'rgba(99,102,241,0.1)',
-                          color: saveStatus.type === 'success' ? 'var(--success)' : '#a5b4fc',
-                          border: `1px solid ${saveStatus.type === 'success' ? 'rgba(16,185,129,0.2)' : 'rgba(99,102,241,0.2)'}`
-                        }}>
-                          {saveStatus.message}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                </div>
-              </fieldset>
-            </form>
-
-             {/* User Management Section (Admin Only) */}
-            {role === 'admin' && (
-              <div style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '1.5rem', marginTop: '1.5rem' }}>
-                <h3 style={{ color: '#818cf8', fontWeight: 700, fontSize: '0.95rem', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <IconSettings /> Authorized Users
-                  </span>
-                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                    Total: {Object.keys(formConfig.allowedEmails || {}).length}
-                  </span>
-                </h3>
-                <div style={{ background: 'rgba(255,255,255,0.02)', padding: '1rem', borderRadius: '0.5rem', border: '1px solid var(--border-glass)' }}>
-                  
-                  {/* List existing allowed emails */}
-                  {Object.keys(formConfig.allowedEmails || {}).length === 0 ? (
-                    <p style={{ fontSize: '0.8rem', color: '#94a3b8', margin: '0 0 1rem 0' }}>No extra users registered yet. Add emails below.</p>
-                  ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1rem', maxHeight: '150px', overflowY: 'auto', paddingRight: '6px' }}>
-                      {Object.entries(formConfig.allowedEmails).map(([emailAddr, userRole]) => {
-                        const r = typeof userRole === 'object' ? userRole.role : userRole;
-                        return (
-                          <div key={emailAddr} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.03)', padding: '0.4rem 0.6rem', borderRadius: '0.25rem', fontSize: '0.8rem' }}>
-                            <span>{emailAddr} <strong style={{ color: r === 'admin' ? '#818cf8' : '#fbbf24', fontSize: '0.75rem' }}>({r})</strong></span>
-                            <button 
-                              type="button" 
-                              onClick={() => {
-                                const updatedEmails = { ...formConfig.allowedEmails };
-                                delete updatedEmails[emailAddr];
-                                const newConfig = { ...formConfig, allowedEmails: updatedEmails };
-                                setFormConfig(newConfig);
-                                setTimeout(() => {
-                                  authedFetch(`${API_BASE}/config`, {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify(newConfig)
-                                  });
-                                }, 100);
-                              }}
-                              style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', padding: '2px 6px', fontSize: '0.75rem' }}
-                            >
-                              Remove
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                  {/* Add user form */}
-                  <div style={{ display: 'flex', gap: '0.5rem' }}>
-                    <input 
-                      type="email" 
-                      placeholder="friend@gmail.com" 
-                      value={userEmailInput}
-                      onChange={(e) => setUserEmailInput(e.target.value)}
-                      style={{ flex: 1, padding: '0.4rem 0.6rem', fontSize: '0.8rem', borderRadius: '0.25rem', border: '1px solid var(--border-glass)', background: 'rgba(0,0,0,0.2)', color: '#fff' }}
-                    />
-                    <select 
-                      value={userRoleInput}
-                      onChange={(e) => setUserRoleInput(e.target.value)}
-                      style={{ padding: '0.4rem 0.6rem', fontSize: '0.8rem', borderRadius: '0.25rem', border: '1px solid var(--border-glass)', background: 'rgba(0,0,0,0.2)', color: '#fff' }}
-                    >
-                      <option value="viewer">Viewer</option>
-                      <option value="admin">Admin</option>
-                    </select>
-                    <button 
-                      type="button"
-                      onClick={() => {
-                        if (!userEmailInput.trim() || !userEmailInput.includes('@')) return;
-                        const updatedEmails = { ...formConfig.allowedEmails, [userEmailInput.trim()]: userRoleInput };
-                        const newConfig = { ...formConfig, allowedEmails: updatedEmails };
-                        setFormConfig(newConfig);
-                        setUserEmailInput('');
-                        setTimeout(() => {
-                          authedFetch(`${API_BASE}/config`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(newConfig)
-                          });
-                        }, 100);
-                      }}
-                      className="btn btn-secondary" 
-                      style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
-                    >
-                      Add
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
+          
+          {/* Segmented tabs layout for mobile only */}
+          <div className="mobile-tabs-bar">
+            <button 
+              type="button" 
+              onClick={() => setActiveMobileTab('status')} 
+              className={`mobile-tab-btn ${activeMobileTab === 'status' ? 'active' : ''}`}
+            >
+              📊 Slots & Logs
+            </button>
+            <button 
+              type="button" 
+              onClick={() => setActiveMobileTab('config')} 
+              className={`mobile-tab-btn ${activeMobileTab === 'config' ? 'active' : ''}`}
+            >
+              ⚙️ Configuration
+            </button>
           </div>
-
-          {/* Test Notifications card */}
-          {role !== 'viewer' && (
+        
+          {/* Left Column: Config Panel */}
+          <section className={activeMobileTab === 'config' ? 'mobile-visible' : 'mobile-hidden'}>
             <div className="glass-card">
               <div className="card-title">
-                <IconBell /> Test Alert Routing
+                <IconSettings /> Engine Selection
               </div>
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.775rem', marginBottom: '1rem', lineHeight: 1.4 }}>
-                Instantly test if your alert configurations are functional by triggering dummy notifications.
-              </p>
-              
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.75rem', marginBottom: alertStatus.message ? '0.75rem' : '0' }}>
-                <button onClick={() => handleTestAlert('desktop')} disabled={isOffline} className="btn btn-secondary" style={{ fontSize: '0.75rem', padding: '0.6rem 0.1rem' }}>
-                  macOS Sound
+
+              {/* Engine Tabs */}
+              <div className="engine-tabs" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.25rem' }}>
+                <button
+                  type="button"
+                  className={`engine-tab ${formConfig.engine === 'browser' ? 'active' : ''}`}
+                  onClick={() => handleSwitchEngine('browser')}
+                  style={{ fontSize: '0.7rem', padding: '0.5rem 0.25rem' }}
+                >
+                  Browser Auto
                 </button>
-                <button onClick={() => handleTestAlert('telegram')} disabled={isOffline || !formConfig.telegramToken} className="btn btn-secondary" style={{ fontSize: '0.75rem', padding: '0.6rem 0.1rem' }}>
-                  Telegram Bot
+                <button
+                  type="button"
+                  className={`engine-tab ${formConfig.engine === 'only_login' ? 'active' : ''}`}
+                  onClick={() => handleSwitchEngine('only_login')}
+                  style={{ fontSize: '0.7rem', padding: '0.5rem 0.25rem' }}
+                >
+                  Login Only
+                </button>
+                <button
+                  type="button"
+                  className={`engine-tab ${formConfig.engine === 'api' ? 'active' : ''}`}
+                  onClick={() => handleSwitchEngine('api')}
+                  style={{ fontSize: '0.7rem', padding: '0.5rem 0.25rem' }}
+                >
+                  API (Silent)
                 </button>
               </div>
 
-              {alertStatus.message && (
-                <div style={{
-                  padding: '0.5rem',
-                  fontSize: '0.8rem',
-                  borderRadius: '0.25rem',
-                  textAlign: 'center',
-                  background: alertStatus.type === 'success' ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
-                  color: alertStatus.type === 'success' ? 'var(--success)' : '#f87171',
-                  border: `1px solid ${alertStatus.type === 'success' ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)'}`
-                }}>
-                  {alertStatus.message}
+              <form onSubmit={handleSaveConfig}>
+                <fieldset disabled={role === 'viewer'} style={{ border: 'none', padding: 0, margin: 0 }}>
+                  <div className="settings-grid">
+                    
+                    {/* Engine Specific Options */}
+                    {(formConfig.engine === 'browser' || formConfig.engine === 'only_login') ? (
+                      <>
+                        <div className="form-group full-width">
+                          <div style={{ background: 'rgba(99, 102, 241, 0.08)', border: '1px solid rgba(99, 102, 241, 0.2)', padding: '0.85rem', borderRadius: '0.5rem', fontSize: '0.8rem', color: '#a5b4fc', lineHeight: 1.4 }}>
+                            {formConfig.engine === 'only_login' ? (
+                              <span><strong>Login Only Mode</strong>: Opens the stealth Chromium browser and automatically logs you in (autofilling your credentials & security questions). Once logged in, it remains idle and keeps the session active without checking slots, so you do not get rate-limited.</span>
+                            ) : (
+                              <span><strong>Direct Browser Automation</strong>: Uses a patched Chromium instance. Once started, a browser window will open, autofill your credentials, solve security questions automatically, and check OFC slots. You only need to solve the CAPTCHA code.</span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="form-group">
+                          <label>Applicant Name (Group member match)</label>
+                          <input
+                            type="text"
+                            placeholder="e.g. JOHN DOE (matches table row exactly)"
+                            value={formConfig.applicantName}
+                            onChange={(e) => setFormConfig({ ...formConfig, applicantName: e.target.value })}
+                          />
+                        </div>
+
+                        <div className="form-group">
+                          <label>Login Timeout (seconds)</label>
+                          <input
+                            type="number"
+                            min="60"
+                            value={formConfig.loginTimeoutSeconds}
+                            onChange={(e) => setFormConfig({ ...formConfig, loginTimeoutSeconds: parseInt(e.target.value) || 600 })}
+                          />
+                        </div>
+
+                        <div className="form-group">
+                          <label>Portal Username / Email</label>
+                          <input
+                            type="text"
+                            placeholder="Portal Username"
+                            value={formConfig.portalUsername || ""}
+                            onChange={(e) => setFormConfig({ ...formConfig, portalUsername: e.target.value })}
+                          />
+                        </div>
+
+                         <div className="form-group">
+                           <label>Portal Password</label>
+                           <input
+                             type="password"
+                             placeholder="Portal Password"
+                             value={formConfig.portalPassword || ""}
+                             onChange={(e) => setFormConfig({ ...formConfig, portalPassword: e.target.value })}
+                           />
+                         </div>
+
+                         <div className="form-group full-width" style={{ marginTop: '0.25rem' }}>
+                           <label className={`checkbox-label ${formConfig.clearBrowserProfileOnStart ? 'checked' : ''}`} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                             <input
+                               type="checkbox"
+                               checked={formConfig.clearBrowserProfileOnStart || false}
+                               onChange={(e) => setFormConfig({ ...formConfig, clearBrowserProfileOnStart: e.target.checked })}
+                               style={{ display: 'none' }}
+                             />
+                             <span className="checkbox-box"></span>
+                             <span style={{ fontSize: '0.825rem', color: '#e2e8f0' }}>Clear Browser Cache/Session on Start</span>
+                           </label>
+                         </div>
+
+                         {/* Security Question Answers */}
+                         <div className="form-group full-width" style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '1.25rem', marginTop: '0.5rem' }}>
+                           <label style={{ color: '#818cf8', fontWeight: 700 }}>Security Question Answers (Autofill)</label>
+                         </div>
+
+                         <div className="form-group">
+                           <label>School / Education / College Answer</label>
+                           <input
+                             type="text"
+                             placeholder="e.g. High School or College name"
+                             value={formConfig.securitySchool || ""}
+                             onChange={(e) => setFormConfig({ ...formConfig, securitySchool: e.target.value })}
+                           />
+                         </div>
+
+                         <div className="form-group">
+                           <label>Car / Vehicle / Automobile Answer</label>
+                           <input
+                             type="text"
+                             placeholder="e.g. First car make/model"
+                             value={formConfig.securityCar || ""}
+                             onChange={(e) => setFormConfig({ ...formConfig, securityCar: e.target.value })}
+                           />
+                         </div>
+
+                         <div className="form-group">
+                           <label>Job / Work / Company / City Answer</label>
+                           <input
+                             type="text"
+                             placeholder="e.g. First job city or employer"
+                             value={formConfig.securityJob || ""}
+                             onChange={(e) => setFormConfig({ ...formConfig, securityJob: e.target.value })}
+                           />
+                         </div>
+
+                         <div className="form-group">
+                           <label>Food / Favorite Dish / Restaurant Answer</label>
+                           <input
+                             type="text"
+                             placeholder="e.g. Favorite food"
+                             value={formConfig.securityFood || ""}
+                             onChange={(e) => setFormConfig({ ...formConfig, securityFood: e.target.value })}
+                           />
+                         </div>
+      
+                         <div className="form-group full-width">
+                           <label>2Captcha API Key (Optional auto-login solver)</label>
+                           <input
+                             type="password"
+                             placeholder="Enter 2Captcha Key for auto CAPTCHA solving"
+                             value={formConfig.captchaApiKey || ""}
+                             onChange={(e) => setFormConfig({ ...formConfig, captchaApiKey: e.target.value })}
+                           />
+                         </div>
+
+                      </>
+                    ) : (
+                      <>
+                        <div className="form-group full-width">
+                          <div style={{ background: 'rgba(139, 92, 246, 0.08)', border: '1px solid rgba(139, 92, 246, 0.2)', padding: '0.85rem', borderRadius: '0.5rem', fontSize: '0.8rem', color: '#c084fc', lineHeight: 1.4 }}>
+                            <strong>Silent API Monitor</strong>: Pulls crowdsourced slot data from the CheckVisaSlots platform. Requires no browser runtime. Enter your API key / Access Code below to query.
+                          </div>
+                        </div>
+
+                        <div className="form-group full-width">
+                          <label>CheckVisaSlots API Key / Access Code</label>
+                          <div className="input-container">
+                            <input
+                              type="password"
+                              placeholder="Paste your checkvisaslots token here"
+                              value={formConfig.checkVisaSlotsApiKey}
+                              onChange={(e) => setFormConfig({ ...formConfig, checkVisaSlotsApiKey: e.target.value })}
+                            />
+                          </div>
+                        </div>
+
+                      </>
+                    )}
+
+                    {/* Target VACs Selection */}
+                    <div className="form-group full-width" style={{ marginTop: '0.5rem' }}>
+                      <label>Target OFC Consulates (Select to check)</label>
+                      <div className="checkbox-grid">
+                        {INDIA_VACs.map(city => {
+                          const isChecked = formConfig.ofcCities.includes(city);
+                          return (
+                            <label key={city} className={`checkbox-label ${isChecked ? 'checked' : ''}`}>
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={() => handleCityToggle(city)}
+                              />
+                              <span className="checkbox-box"></span>
+                              {city}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Telegram Settings */}
+                    <div className="form-group full-width" style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '1.25rem', marginTop: '0.5rem' }}>
+                      <label style={{ color: '#818cf8', fontWeight: 700 }}>Telegram Notification Settings</label>
+                    </div>
+
+                    <div className="form-group">
+                      <label>Bot Token</label>
+                      <input
+                        type="password"
+                        placeholder="Enter Telegram Bot Token"
+                        value={formConfig.telegramToken}
+                        onChange={(e) => setFormConfig({ ...formConfig, telegramToken: e.target.value })}
+                      />
+                    </div>
+
+                    <div className="form-group">
+                      <label>Chat ID</label>
+                      <input
+                        type="text"
+                        placeholder="Enter Chat ID (e.g. -100xxx)"
+                        value={formConfig.telegramChatId}
+                        onChange={(e) => setFormConfig({ ...formConfig, telegramChatId: e.target.value })}
+                      />
+                    </div>
+
+                    {/* Google OAuth Authentication Settings */}
+                    <div className="form-group full-width" style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '1.25rem', marginTop: '0.5rem' }}>
+                      <label style={{ color: '#818cf8', fontWeight: 700 }}>Google Authentication Settings</label>
+                    </div>
+
+                    <div className="form-group">
+                      <label>Google Client ID</label>
+                      <input
+                        type="text"
+                        placeholder="Enter Google Client ID"
+                        value={formConfig.googleClientId || ''}
+                        onChange={(e) => setFormConfig({ ...formConfig, googleClientId: e.target.value })}
+                      />
+                    </div>
+
+                    <div className="form-group">
+                      <label>Google Client Secret</label>
+                      <input
+                        type="password"
+                        placeholder="Enter Google Client Secret"
+                        value={formConfig.googleClientSecret || ''}
+                        onChange={(e) => setFormConfig({ ...formConfig, googleClientSecret: e.target.value })}
+                      />
+                    </div>
+
+                    {/* Submit Panel */}
+                    {role !== 'viewer' && (
+                      <div className="form-group full-width" style={{ marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                        <button type="submit" disabled={isOffline} className="btn btn-primary" style={{ width: '100%' }}>
+                          <IconSave /> Save All Configurations
+                        </button>
+
+                        {saveStatus.message && (
+                          <div style={{
+                            padding: '0.5rem',
+                            fontSize: '0.8rem',
+                            borderRadius: '0.25rem',
+                            textAlign: 'center',
+                            background: saveStatus.type === 'success' ? 'rgba(16,185,129,0.1)' : 'rgba(99,102,241,0.1)',
+                            color: saveStatus.type === 'success' ? 'var(--success)' : '#a5b4fc',
+                            border: `1px solid ${saveStatus.type === 'success' ? 'rgba(16,185,129,0.2)' : 'rgba(99,102,241,0.2)'}`
+                          }}>
+                            {saveStatus.message}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                  </div>
+                </fieldset>
+              </form>
+
+               {/* User Management Section (Admin Only) */}
+              {role === 'admin' && (
+                <div style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '1.5rem', marginTop: '1.5rem' }}>
+                  <h3 style={{ color: '#818cf8', fontWeight: 700, fontSize: '0.95rem', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <IconSettings /> Authorized Users
+                    </span>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                      Total: {Object.keys(formConfig.allowedEmails || {}).length}
+                    </span>
+                  </h3>
+                  <div style={{ background: 'rgba(255,255,255,0.02)', padding: '1rem', borderRadius: '0.5rem', border: '1px solid var(--border-glass)' }}>
+                    
+                    {/* List existing allowed emails */}
+                    {Object.keys(formConfig.allowedEmails || {}).length === 0 ? (
+                      <p style={{ fontSize: '0.8rem', color: '#94a3b8', margin: '0 0 1rem 0' }}>No extra users registered yet. Add emails below.</p>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1rem', maxHeight: '150px', overflowY: 'auto', paddingRight: '6px' }}>
+                        {Object.entries(formConfig.allowedEmails).map(([emailAddr, userRole]) => {
+                          const r = typeof userRole === 'object' ? userRole.role : userRole;
+                          return (
+                            <div key={emailAddr} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.03)', padding: '0.4rem 0.6rem', borderRadius: '0.25rem', fontSize: '0.8rem' }}>
+                              <span>{emailAddr} <strong style={{ color: r === 'admin' ? '#818cf8' : '#fbbf24', fontSize: '0.75rem' }}>({r})</strong></span>
+                              <button 
+                                type="button" 
+                                onClick={() => {
+                                  const updatedEmails = { ...formConfig.allowedEmails };
+                                  delete updatedEmails[emailAddr];
+                                  const newConfig = { ...formConfig, allowedEmails: updatedEmails };
+                                  setFormConfig(newConfig);
+                                  setTimeout(() => {
+                                    authedFetch(`${API_BASE}/config`, {
+                                      method: 'POST',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify(newConfig)
+                                    });
+                                  }, 100);
+                                }}
+                                style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', padding: '2px 6px', fontSize: '0.75rem' }}
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* Add user form */}
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      <input 
+                        type="email" 
+                        placeholder="friend@gmail.com" 
+                        value={userEmailInput}
+                        onChange={(e) => setUserEmailInput(e.target.value)}
+                        style={{ flex: 1, padding: '0.4rem 0.6rem', fontSize: '0.8rem', borderRadius: '0.25rem', border: '1px solid var(--border-glass)', background: 'rgba(0,0,0,0.2)', color: '#fff' }}
+                      />
+                      <select 
+                        value={userRoleInput}
+                        onChange={(e) => setUserRoleInput(e.target.value)}
+                        style={{ padding: '0.4rem 0.6rem', fontSize: '0.8rem', borderRadius: '0.25rem', border: '1px solid var(--border-glass)', background: 'rgba(0,0,0,0.2)', color: '#fff' }}
+                      >
+                        <option value="viewer">Viewer</option>
+                        <option value="admin">Admin</option>
+                      </select>
+                      <button 
+                        type="button"
+                        onClick={() => {
+                          if (!userEmailInput.trim() || !userEmailInput.includes('@')) return;
+                          const updatedEmails = { ...formConfig.allowedEmails, [userEmailInput.trim()]: userRoleInput };
+                          const newConfig = { ...formConfig, allowedEmails: updatedEmails };
+                          setFormConfig(newConfig);
+                          setUserEmailInput('');
+                          setTimeout(() => {
+                            authedFetch(`${API_BASE}/config`, {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify(newConfig)
+                            });
+                          }, 100);
+                        }}
+                        className="btn btn-secondary" 
+                        style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
+                      >
+                        Add
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
-          )}
-        </section>
 
-        {/* Right Column: Live Status, Log output, and History */}
-        <section>
-          
-          {renderSlotsCard()}
-
-          {/* Terminal Console Logs Card */}
-          <div className="glass-card" style={{ padding: '1.25rem' }}>
-            <div className="card-title" style={{ justifyContent: 'space-between' }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <IconTerminal /> Terminal Stream
-              </span>
-              <button 
-                onClick={fetchLogs} 
-                className="btn btn-secondary" 
-                style={{ padding: '0.25rem 0.5rem', fontSize: '0.7rem', display: 'flex', gap: '0.25rem', alignItems: 'center' }}
-              >
-                <IconRefresh /> Refresh
-              </button>
-            </div>
-
-            <div className="terminal">
-              <div className="terminal-header">
-                <div className="terminal-dots">
-                  <span className="terminal-dot red"></span>
-                  <span className="terminal-dot yellow"></span>
-                  <span className="terminal-dot green"></span>
+            {/* Test Notifications card */}
+            {role !== 'viewer' && (
+              <div className="glass-card">
+                <div className="card-title">
+                  <IconBell /> Test Alert Routing
                 </div>
-                <span>app.log</span>
-              </div>
-              <div className="terminal-body" ref={terminalBodyRef}>
-                {logs.length > 0 ? (
-                  logs.map((log, idx) => (
-                    <div key={idx} className="log-line">{log}</div>
-                  ))
-                ) : (
-                  <div style={{ color: 'var(--text-dark)', fontStyle: 'italic' }}>Console log is empty. Click Start Scanning to begin logging...</div>
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.775rem', marginBottom: '1rem', lineHeight: 1.4 }}>
+                  Instantly test if your alert configurations are functional by triggering dummy notifications.
+                </p>
+                
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.75rem', marginBottom: alertStatus.message ? '0.75rem' : '0' }}>
+                  <button onClick={() => handleTestAlert('desktop')} disabled={isOffline} className="btn btn-secondary" style={{ fontSize: '0.75rem', padding: '0.6rem 0.1rem' }}>
+                    macOS Sound
+                  </button>
+                  <button onClick={() => handleTestAlert('telegram')} disabled={isOffline || !formConfig.telegramToken} className="btn btn-secondary" style={{ fontSize: '0.75rem', padding: '0.6rem 0.1rem' }}>
+                    Telegram Bot
+                  </button>
+                </div>
+
+                {alertStatus.message && (
+                  <div style={{
+                    padding: '0.5rem',
+                    fontSize: '0.8rem',
+                    borderRadius: '0.25rem',
+                    textAlign: 'center',
+                    background: alertStatus.type === 'success' ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
+                    color: alertStatus.type === 'success' ? 'var(--success)' : '#f87171',
+                    border: `1px solid ${alertStatus.type === 'success' ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)'}`
+                  }}>
+                    {alertStatus.message}
+                  </div>
                 )}
               </div>
+            )}
+          </section>
+
+          {/* Right Column: Live Status, Log output, and History */}
+          <section className={activeMobileTab === 'status' ? 'mobile-visible' : 'mobile-hidden'}>
+            
+            {renderSlotsCard()}
+
+            {/* Terminal Console Logs Card */}
+            <div className="glass-card" style={{ padding: '1.25rem' }}>
+              <div className="card-title" style={{ justifyContent: 'space-between' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <IconTerminal /> Terminal Stream
+                </span>
+                <button 
+                  onClick={fetchLogs} 
+                  className="btn btn-secondary" 
+                  style={{ padding: '0.25rem 0.5rem', fontSize: '0.7rem', display: 'flex', gap: '0.25rem', alignItems: 'center' }}
+                >
+                  <IconRefresh /> Refresh
+                </button>
+              </div>
+
+              <div className="terminal">
+                <div className="terminal-header">
+                  <div className="terminal-dots">
+                    <span className="terminal-dot red"></span>
+                    <span className="terminal-dot yellow"></span>
+                    <span className="terminal-dot green"></span>
+                  </div>
+                  <span>app.log</span>
+                </div>
+                <div className="terminal-body" ref={terminalBodyRef}>
+                  {logs.length > 0 ? (
+                    logs.map((log, idx) => (
+                      <div key={idx} className="log-line">{log}</div>
+                    ))
+                  ) : (
+                    <div style={{ color: 'var(--text-dark)', fontStyle: 'italic' }}>Console log is empty. Click Start Scanning to begin logging...</div>
+                  )}
+                </div>
+              </div>
             </div>
-          </div>
 
-          {renderHistoryCard()}
+            {renderHistoryCard()}
 
-        </section>
+          </section>
 
-      </main>
+        </main>
       )}
     </div>
   );

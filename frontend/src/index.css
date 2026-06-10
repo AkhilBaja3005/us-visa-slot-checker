@@ -627,7 +627,6 @@ input:focus, select:focus {
   background: rgba(255, 255, 255, 0.01);
 }
 
-/* Animations */
 @keyframes pulse {
   0%, 100% {
     opacity: 1;
@@ -637,4 +636,183 @@ input:focus, select:focus {
     opacity: 0.6;
     box-shadow: 0 0 10px 2px rgba(99, 102, 241, 0.2);
   }
+}
+
+/* --- Mobile View & Responsive Layout Overrides --- */
+@media (max-width: 768px) {
+  .app-container {
+    padding: 0.75rem 0.5rem;
+  }
+
+  .header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding-bottom: 0.75rem;
+    margin-bottom: 1rem;
+  }
+
+  .header-actions {
+    display: flex;
+    width: 100%;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .title-area h1 {
+    font-size: 1.3rem;
+  }
+  
+  .title-area p {
+    font-size: 0.75rem;
+    margin-top: 0.15rem;
+  }
+
+  .dashboard-grid {
+    gap: 0.75rem !important;
+  }
+
+  .glass-card {
+    padding: 0.85rem !important;
+    margin-bottom: 0.75rem !important;
+    border-radius: 0.5rem !important;
+  }
+
+  .card-title {
+    font-size: 0.95rem !important;
+    margin-bottom: 0.75rem !important;
+  }
+
+  /* Compact Slot Cards Grid */
+  .slots-container {
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)) !important;
+    gap: 0.5rem !important;
+  }
+
+  .slot-card {
+    padding: 0.5rem !important;
+    min-height: 55px !important;
+    border-radius: 0.35rem !important;
+  }
+
+  .slot-city {
+    font-size: 0.7rem !important;
+  }
+
+  .slot-status-text {
+    font-size: 0.75rem !important;
+    margin-top: 0.15rem !important;
+  }
+
+  /* Compact Form Controls */
+  .form-group {
+    margin-bottom: 0.75rem !important;
+  }
+
+  .form-row,
+  .grid-2 {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
+    gap: 0.5rem !important;
+  }
+
+  label {
+    font-size: 0.75rem !important;
+    margin-bottom: 0.2rem !important;
+  }
+
+  input[type="text"], 
+  input[type="password"], 
+  input[type="number"], 
+  select {
+    padding: 0.5rem 0.65rem !important;
+    font-size: 0.85rem !important;
+    min-height: 38px !important; /* Slightly more compact but still highly touch-friendly */
+    border-radius: 0.35rem !important;
+  }
+
+  .btn,
+  button {
+    padding: 0.5rem 1rem !important;
+    font-size: 0.85rem !important;
+    min-height: 38px !important;
+    border-radius: 0.35rem !important;
+  }
+
+  /* Compact Terminal Console */
+  .terminal-header {
+    padding: 0.4rem 0.75rem !important;
+  }
+
+  .terminal-body {
+    height: 140px !important;
+    font-size: 0.7rem !important;
+    padding: 0.5rem !important;
+    gap: 0.15rem !important;
+  }
+
+  /* Compact History table to fit screen width */
+  .history-table th, 
+  .history-table td {
+    padding: 0.45rem 0.35rem !important;
+    font-size: 0.7rem !important;
+  }
+  
+  .history-table th:nth-child(4),
+  .history-table td:nth-child(4),
+  .history-table th:nth-child(3),
+  .history-table td:nth-child(3) {
+    display: none; /* Hide less critical columns on small mobile screen sizes to completely avoid clutter */
+  }
+
+  /* Segmented tabs layout for mobile */
+  .mobile-tabs-bar {
+    display: flex !important;
+    gap: 0.25rem;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border-glass);
+    border-radius: 0.5rem;
+    padding: 0.25rem;
+    margin-bottom: 1rem;
+    width: 100%;
+  }
+
+  .mobile-tab-btn {
+    flex: 1;
+    background: transparent !important;
+    border: none !important;
+    color: var(--text-muted) !important;
+    font-size: 0.85rem !important;
+    font-weight: 600 !important;
+    padding: 0.5rem 0.75rem !important;
+    border-radius: 0.35rem !important;
+    cursor: pointer;
+    min-height: 36px !important;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    transition: all 0.2s ease;
+  }
+
+  .mobile-tab-btn.active {
+    background: var(--primary) !important;
+    color: #ffffff !important;
+    box-shadow: 0 4px 12px rgba(99, 102, 241, 0.25);
+  }
+
+  /* Column visibility toggles */
+  .mobile-hidden {
+    display: none !important;
+  }
+  
+  .mobile-visible {
+    display: block !important;
+  }
+}
+
+/* Hide mobile tabs on desktop */
+.mobile-tabs-bar {
+  display: none;
 }
