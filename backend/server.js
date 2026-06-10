@@ -701,15 +701,34 @@ async function waitForLoginAsync(page, timeoutSeconds) {
       const isUsvisaPage = url.includes('usvisascheduling.com');
       if (isUsvisaPage && !hostname.includes(LOGIN_DOMAIN)) {
         const loggedInIndicator = page.locator('text=Sign Out, text=Sign out, text=Logout, text=Dashboard, #schedule-appointment, select, .username, a[href*="logout" i], a[href*="signout" i], a[href*="logoff" i], a[title*="sign out" i]');
-        if (await loggedInIndicator.count() > 0) {
+        const hasLoggedInElements = await loggedInIndicator.count() > 0;
+        
+        if (reachedLoginPage || hasLoggedInElements) {
           logMsg("Detected active authenticated portal session page. Exiting login loop immediately!");
           monitorState.status = "running";
-          setTimeout(runCycle, 2000);
+          triggerDesktopNotification("US Visa Slot Monitor", "Login verified. Direct monitoring active!");
+          if (config.engine === "only_login") {
+            sendTelegram("✅ <b>Login Verified</b>. The browser session is active and staying idle.", config.telegramToken, config.telegramChatId);
+          } else {
+            sendTelegram("✅ <b>Login Verified</b>. The browser monitor is now checking slots.", config.telegramToken, config.telegramChatId);
+          }
+          // Trigger check cycle with a safety delay to let session and cookies settle
+          setTimeout(runCycle, 8000);
           return;
         }
       }
 
       const title = await page.title().catch(() => "");
+
+      // Track state changes (like entering login pages or queues) and alert via Telegram
+      const bodyTextSnippet = await page.evaluate(() => document.body ? document.body.innerText.slice(0, 250).replace(/\n/g, ' ') : "").catch(() => "");
+      const currentWaitState = `${title} | ${bodyTextSnippet}`;
+      if (!global.lastWaitState || global.lastWaitState !== currentWaitState) {
+        global.lastWaitState = currentWaitState;
+        logMsg(`[Status Change] ${title} - sending Telegram update.`);
+        sendTelegram(`🔄 <b>Session Status Update</b>\n\n📌 <b>Title:</b> ${title}\n📝 <b>Page Context:</b>\n<i>${bodyTextSnippet.slice(0, 200)}...</i>`, config.telegramToken, config.telegramChatId);
+      }
+
       const isWaitingRoom = title.includes("You are now in line") || title.includes("Waiting Room") || (await page.locator('text=You are now in line').count() > 0);
       const isCloudflare = url.includes("cf_chl") || title.includes("Just a moment") || title.includes("Cloudflare") || isWaitingRoom;
       
@@ -736,31 +755,6 @@ async function waitForLoginAsync(page, timeoutSeconds) {
       // Call autofill helper only if we are on the login domain (or if we have reached it)
       if (reachedLoginPage) {
         await handleAutoLoginHelper(page);
-      }
-      
-      // Success Criteria check:
-      // We must be back on the portal domain AND not on the login domain
-      const onPortal = !hostname.includes(LOGIN_DOMAIN) && hostname.includes("usvisascheduling.com");
-      
-      if (onPortal) {
-        // If we are back on the portal, check if we see indicators of being logged in (or if we explicitly completed login)
-        const loggedInIndicator = page.locator('text=Sign Out, text=Sign out, text=Logout, text=Dashboard, #schedule-appointment, select, .username, a[href*="logout" i], a[href*="signout" i], a[href*="logoff" i], a[title*="sign out" i]');
-        const hasLoggedInElements = await loggedInIndicator.count() > 0;
-        
-        if (reachedLoginPage || hasLoggedInElements) {
-          logMsg("Login verified successfully!");
-          monitorState.status = "running";
-          triggerDesktopNotification("US Visa Slot Monitor", "Login verified. Direct monitoring active!");
-          if (config.engine === "only_login") {
-            sendTelegram("✅ <b>Login Verified</b>. The browser session is active and staying idle.", config.telegramToken, config.telegramChatId);
-          } else {
-            sendTelegram("✅ <b>Login Verified</b>. The browser monitor is now checking slots.", config.telegramToken, config.telegramChatId);
-          }
-          
-          // Trigger check cycle with a safety delay to let session and cookies settle
-          setTimeout(runCycle, 8000);
-          return;
-        }
       }
     } catch (err) {
       // Ignore intermediate navigation errors
@@ -1583,6 +1577,9 @@ function stopScheduler() {
   logMsg("Background scheduler stopped.");
   cleanupBrowser();
 
+  // Alert Telegram when scanner stops
+  sendTelegram(`🛑 <b>US Visa Monitor Stopped</b>\n\nThe scheduler loop has been stopped. Browser session terminated.`, config.telegramToken, config.telegramChatId);
+
   // Restore sleep mode on macOS
   if (caffeinateProcess) {
     try {
@@ -1594,6 +1591,19 @@ function stopScheduler() {
     caffeinateProcess = null;
   }
 }
+
+// Graceful process shutdown exit handlers
+const handleGracefulShutdown = (signal) => {
+  logMsg(`Received signal ${signal}. Starting graceful shutdown...`);
+  sendTelegram(`🔌 <b>US Visa Backend Offline</b>\n\nThe Node.js server process was terminated (Signal: ${signal}). Local checker is offline.`, config.telegramToken, config.telegramChatId);
+  stopScheduler();
+  setTimeout(() => {
+    process.exit(0);
+  }, 1000);
+};
+
+process.once('SIGINT', () => handleGracefulShutdown('SIGINT'));
+process.once('SIGTERM', () => handleGracefulShutdown('SIGTERM'));
 
 
 
