@@ -91,6 +91,12 @@ function logMsg(message) {
   const ts = new Date().toLocaleString();
   const line = `[${ts}] ${message}\n`;
   try {
+    if (fs.existsSync(logFilePath)) {
+      const stats = fs.statSync(logFilePath);
+      if (stats.size > 10 * 1024 * 1024) { // 10MB
+        fs.writeFileSync(logFilePath, `[${ts}] Log file cleared as it exceeded 10MB limit.\n`);
+      }
+    }
     fs.appendFileSync(logFilePath, line);
   } catch (err) {
     console.error("Failed to write to app.log:", err);
@@ -319,7 +325,7 @@ async function cleanupBrowser() {
 async function isSessionAlive(page) {
   try {
     logMsg("Loading OFC page to test session validity...");
-    await page.goto(OFC_SCHEDULE_URL, { waitUntil: 'domcontentloaded', timeout: 25000 });
+    await page.goto(OFC_SCHEDULE_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await page.waitForTimeout(2000);
     const hostname = await page.evaluate(() => window.location.hostname);
     return !hostname.includes(LOGIN_DOMAIN);
@@ -394,7 +400,7 @@ async function checkCity(page, city, shouldLoadPage = false, applicantName = "")
   try {
     logMsg(`Selecting consulate: ${city}`);
     if (shouldLoadPage) {
-      await page.goto(OFC_SCHEDULE_URL, { waitUntil: 'domcontentloaded', timeout: 25000 });
+      await page.goto(OFC_SCHEDULE_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
       await page.waitForTimeout(1000);
 
       // If an applicant name is specified, click their checkbox row
@@ -697,13 +703,16 @@ async function waitForLoginAsync(page, timeoutSeconds) {
         // Fallback if URL is about:blank
       }
       
+      const title = await page.title().catch(() => "");
+      
       // Success criteria: If we are on any portal page and it loaded successfully with logged-in indicators, exit early
       const isUsvisaPage = url.includes('usvisascheduling.com');
       if (isUsvisaPage && !hostname.includes(LOGIN_DOMAIN)) {
         const loggedInIndicator = page.locator('text=Sign Out, text=Sign out, text=Logout, text=Dashboard, #schedule-appointment, select, .username, a[href*="logout" i], a[href*="signout" i], a[href*="logoff" i], a[title*="sign out" i]');
         const hasLoggedInElements = await loggedInIndicator.count() > 0;
+        const hasDashboardTitle = title.includes("Visa Application Home") || title.includes("OFC Appointment");
         
-        if (reachedLoginPage || hasLoggedInElements) {
+        if (reachedLoginPage || hasLoggedInElements || hasDashboardTitle) {
           logMsg("Detected active authenticated portal session page. Exiting login loop immediately!");
           monitorState.status = "running";
           triggerDesktopNotification("US Visa Slot Monitor", "Login verified. Direct monitoring active!");
@@ -717,8 +726,6 @@ async function waitForLoginAsync(page, timeoutSeconds) {
           return;
         }
       }
-
-      const title = await page.title().catch(() => "");
 
       // Track state changes (like entering login pages or queues) and alert via Telegram
       const bodyTextSnippet = await page.evaluate(() => document.body ? document.body.innerText.slice(0, 250).replace(/\n/g, ' ') : "").catch(() => "");
@@ -852,7 +859,7 @@ async function runBrowserContributionCycle() {
     const isSuccess = await waitForLoginContribution(page, 180);
     if (isSuccess) {
       logMsg("Contribution login verified. Loading OFC page...");
-      await page.goto(OFC_SCHEDULE_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await page.goto(OFC_SCHEDULE_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
       await page.waitForTimeout(2000);
 
       if (config.applicantName && config.applicantName.trim()) {
@@ -992,12 +999,25 @@ async function runBrowserCycle() {
   }
 
   // Load the OFC scheduling page once to start the checking process and check session validity
-  logMsg("Loading OFC scheduling page...");
   try {
-    const response = await activePage.goto(OFC_SCHEDULE_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    const currentUrl = activePage.url() || "";
+    const currentTitle = await activePage.title().catch(() => "");
+    const isAlreadyOnOFC = currentUrl.includes('/ofc-schedule') && currentTitle.includes("OFC Appointment");
     
-    await activePage.waitForTimeout(2000);
-
+    let response = null;
+    if (isAlreadyOnOFC) {
+      logMsg("Browser is already on the OFC Scheduling page. Skipping page load/reload.");
+      if (config.engine === "only_login") {
+        monitorState.status = "running";
+        logMsg("[Login Only Mode] Session is active and verified on OFC page. Staying idle.");
+        return;
+      }
+    } else {
+      logMsg("Loading OFC scheduling page...");
+      response = await activePage.goto(OFC_SCHEDULE_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      await activePage.waitForTimeout(2000);
+    }
+    
     const url = activePage.url() || "";
     const title = await activePage.title().catch(() => "");
     
@@ -1079,6 +1099,12 @@ async function runBrowserCycle() {
     if (!activePage || !activeBrowser || !config.isActive) {
       logMsg("Browser closed or scheduler stopped. Aborting scan cycle.");
       break;
+    }
+    
+    // Skip cities without 'VAC' in their name when running browser scans
+    if (!city.toUpperCase().includes("VAC")) {
+      logMsg(`[Browser Mode] Skipping non-VAC consulate option: ${city}`);
+      continue;
     }
     
     logMsg(`Scanning slots for ${city}...`);
@@ -1265,6 +1291,7 @@ let schedulerIntervalId = null;
 let contributionIntervalId = null;
 let hourlySummaryIntervalId = null;
 let isChecking = false;
+let checkCycleStartTime = 0;
 
 // Track history over the last hour for cumulative notifications
 let hourlyChecksCount = 0;
@@ -1305,10 +1332,17 @@ async function sendHourlySummary() {
 
 async function runCycle() {
   if (isChecking) {
-    logMsg("Active check cycle in progress. Skipping duplicate loop.");
-    return;
+    const cycleDuration = Date.now() - checkCycleStartTime;
+    if (cycleDuration > 300000) { // 5 minutes safety timeout
+      logMsg(`[Scheduler Guard] Current active cycle has been running for over 5 minutes (${Math.round(cycleDuration / 1000)}s). Forcing lock release...`);
+      isChecking = false;
+    } else {
+      logMsg("Active check cycle in progress. Skipping duplicate loop.");
+      return;
+    }
   }
   isChecking = true;
+  checkCycleStartTime = Date.now();
 
   try {
     monitorState.lastCheckTime = new Date().toISOString();
@@ -1427,18 +1461,16 @@ async function handleSlotsDetectedNotification(dbConfigData) {
       .eq('id', 1);
 
     if (config.isActive) {
-      // If we are already running
-      if (config.engine === "only_login") {
-        logMsg("[Supabase Trigger] Switch detected: Session is currently in Login Only mode. Upgrading to Browser Auto mode to scan slots...");
-        config.engine = "browser";
-        saveConfig();
-        sendTelegram(`🚀 <b>Auto-Trigger:</b> Cloud detected slots! Upgrading local session from <b>Login Only</b> to <b>Browser Auto</b>...`, config.telegramToken, config.telegramChatId);
-        
-        // Trigger check cycle immediately
-        runBrowserCycle().catch(err => logMsg(`Auto-upgraded browser cycle error: ${err.message}`));
-      } else {
-        logMsg("[Supabase Trigger] Monitor is already running in active slot-scanning mode. Skipping upgrade.");
-      }
+      logMsg("[Supabase Trigger] Cloud detected slots! Ensuring browser is on OFC page and disabling consulate auto-scanning (dropdown clicks) to protect account...");
+      
+      // Force engine to only_login to prevent the loop from clicking consulate dropdowns
+      config.engine = "only_login";
+      saveConfig();
+      
+      sendTelegram(`🚀 <b>Auto-Trigger:</b> Cloud detected slots! Ensuring browser stays open on the <b>OFC Appointment</b> booking page. Auto-scanning (dropdown clicks) disabled to prevent blocks.`, config.telegramToken, config.telegramChatId);
+      
+      // Restart scheduler immediately to safely navigate to the OFC page on the main thread
+      startScheduler();
     } else {
       // If stopped, launch browser in Login Only mode to keep it alive
       logMsg("[Supabase Trigger] Local instance stopped. Launching browser in Login Only mode to await manual login...");
@@ -1479,24 +1511,6 @@ function startScheduler() {
   logMsg("Starting background scheduler loop...");
   config.isActive = true;
   saveConfig();
-
-  // Prevent sleep on macOS when running browser or login mode
-  if (process.platform === 'darwin' && (config.engine === 'browser' || config.engine === 'only_login')) {
-    try {
-      const { spawn } = require('child_process');
-      if (caffeinateProcess) {
-        caffeinateProcess.kill();
-        caffeinateProcess = null;
-      }
-      logMsg("Preventing Mac sleep mode via caffeinate...");
-      caffeinateProcess = spawn('caffeinate', ['-di']);
-      caffeinateProcess.on('error', (err) => {
-        logMsg(`Failed to start caffeinate: ${err.message}`);
-      });
-    } catch (caffErr) {
-      logMsg(`Error initializing caffeinate: ${caffErr.message}`);
-    }
-  }
   
   // Set up hourly stat counters
   hourlyChecksCount = 0;
@@ -1579,6 +1593,13 @@ function stopScheduler() {
 
   // Alert Telegram when scanner stops
   sendTelegram(`🛑 <b>US Visa Monitor Stopped</b>\n\nThe scheduler loop has been stopped. Browser session terminated.`, config.telegramToken, config.telegramChatId);
+}
+
+// Graceful process shutdown exit handlers
+const handleGracefulShutdown = (signal) => {
+  logMsg(`Received signal ${signal}. Starting graceful shutdown...`);
+  sendTelegram(`🔌 <b>US Visa Backend Offline</b>\n\nThe Node.js server process was terminated (Signal: ${signal}). Local checker is offline.`, config.telegramToken, config.telegramChatId);
+  stopScheduler();
 
   // Restore sleep mode on macOS
   if (caffeinateProcess) {
@@ -1590,13 +1611,7 @@ function stopScheduler() {
     }
     caffeinateProcess = null;
   }
-}
 
-// Graceful process shutdown exit handlers
-const handleGracefulShutdown = (signal) => {
-  logMsg(`Received signal ${signal}. Starting graceful shutdown...`);
-  sendTelegram(`🔌 <b>US Visa Backend Offline</b>\n\nThe Node.js server process was terminated (Signal: ${signal}). Local checker is offline.`, config.telegramToken, config.telegramChatId);
-  stopScheduler();
   setTimeout(() => {
     process.exit(0);
   }, 1000);
@@ -1927,6 +1942,39 @@ async function initApp() {
   }
 
   // Only start Supabase listener locally (not on Render cloud)
+  // Prevent sleep on macOS as long as backend server is alive
+  if (process.platform === 'darwin') {
+    try {
+      const { spawn } = require('child_process');
+      if (caffeinateProcess) {
+        caffeinateProcess.kill();
+        caffeinateProcess = null;
+      }
+      logMsg("Preventing Mac sleep mode via caffeinate (Always-On while server running)...");
+      caffeinateProcess = spawn('caffeinate', ['-di']);
+      caffeinateProcess.on('error', (err) => {
+        logMsg(`Failed to start caffeinate: ${err.message}`);
+      });
+    } catch (caffErr) {
+      logMsg(`Error initializing caffeinate: ${caffErr.message}`);
+    }
+  }
+
+  if (!fs.existsSync(rootDir)) {
+    fs.mkdirSync(rootDir, { recursive: true });
+  }
+  await loadConfig();
+  await loadHistory();
+  if (!fs.existsSync(logFilePath)) {
+    fs.writeFileSync(logFilePath, `[${new Date().toLocaleString()}] US Visa Slot Tracker Logs Initialized.\n`, 'utf8');
+  }
+
+  // Auto-start scheduler if configured active
+  if (config.isActive) {
+    startScheduler();
+  }
+
+  // Only start Supabase listener locally (not on Render cloud)
   if (supabase && !process.env.RENDER) {
     startSupabaseListener();
   }
@@ -1938,5 +1986,6 @@ async function initApp() {
 
 initApp().catch(err => {
   logMsg(`Fatal error during application startup: ${err.message}`);
+  if (caffeinateProcess) caffeinateProcess.kill();
   process.exit(1);
 });
