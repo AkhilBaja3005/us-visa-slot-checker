@@ -227,12 +227,14 @@ async function saveHistory(record) {
 // ── Notification Helpers ───────────────────────────────────────────────────
 
 function sendTelegram(message, token, chatId) {
+  let targetChatId = chatId;
+
   if (process.env.DEV_MODE === "true") {
-    logMsg(`[Telegram] [DEV_MODE] Alert skipped: ${message.replace(/<[^>]*>/g, '')}`);
-    return;
+    logMsg(`[Telegram] [DEV_MODE] Overriding target chatId to dev group ID (-5238646343).`);
+    targetChatId = "-5238646343";
   }
 
-  if (!token || !chatId || token.includes("YOUR_") || chatId.includes("YOUR_")) {
+  if (!token || !targetChatId || token.includes("YOUR_") || targetChatId.includes("YOUR_")) {
     logMsg("[Telegram] Alert skipped (credentials not configured).");
     return;
   }
@@ -252,7 +254,7 @@ function sendTelegram(message, token, chatId) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      chat_id: chatId,
+      chat_id: targetChatId,
       text: prefixedMessage,
       parse_mode: "HTML"
     })
