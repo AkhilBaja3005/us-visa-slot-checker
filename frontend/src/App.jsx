@@ -251,8 +251,9 @@ export default function App() {
       if (permission !== 'granted') return;
 
       // Register/get Service Worker
-      const registration = await navigator.serviceWorker.register('/sw.js');
-      console.log('Service Worker registered successfully:', registration);
+      await navigator.serviceWorker.register('/sw.js');
+      const registration = await navigator.serviceWorker.ready;
+      console.log('Service Worker is active and ready:', registration);
 
       // Subscribe to Push Service
       const subscribeOptions = {
