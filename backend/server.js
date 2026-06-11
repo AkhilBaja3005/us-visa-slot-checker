@@ -1076,6 +1076,15 @@ async function runBrowserCycle() {
           }).catch(() => 'error');
           logMsg(`[Login Only Mode] Silent session-ping completed. Status code: ${pingStatus}`);
           lastOFCPageRefreshTime = Date.now();
+
+          if (pingStatus === 403 || pingStatus === 'failed') {
+            logMsg("[Login Only Mode] Session ping failed with 403/error. Cookies expired. Refreshing page to force re-login...");
+            monitorState.status = "awaiting_relogin";
+            // Navigate to trigger clean session refresh
+            await activePage.goto(HOME_URL).catch(() => {});
+            waitForLoginAsync(activePage, config.loginTimeoutSeconds);
+            return;
+          }
         } else {
           logMsg(`[Login Only Mode] Session active on OFC page. Skipping session-ping (last pinged ${Math.round(timeSinceLastPing / 1000)}s ago).`);
         }
