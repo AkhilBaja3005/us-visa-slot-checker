@@ -274,7 +274,7 @@ export default function App() {
       });
     } catch (err) {
       console.error("Failed to enable background push notifications:", err);
-      alert("Failed to activate background notifications. If on iOS, make sure you added the app to your Homescreen first!");
+      alert(`Failed to activate background notifications. Error: ${err.message || err}. If on iOS, make sure you added the app to your Homescreen first!`);
     }
   };
 
