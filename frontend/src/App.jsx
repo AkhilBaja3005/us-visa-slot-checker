@@ -535,7 +535,7 @@ export default function App() {
         </div>
 
         <div className="glass-card" style={{ maxWidth: '400px', width: '100%', padding: '2.5rem', textAlign: 'center' }}>
-          <h1 style={{ fontSize: '1.8rem', color: 'var(--text-main)', marginBottom: '0.5rem', fontWeight: 800 }}>US Visa Slot Monitor <span style={{ background: 'none', WebkitTextFillColor: 'initial', WebkitBackgroundClip: 'initial', display: 'inline-block' }}>🇮🇳</span></h1>
+          <h1 style={{ fontSize: '1.8rem', color: 'var(--text-main)', marginBottom: '0.5rem', fontWeight: 800 }}>US Visa Slot Monitor</h1>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '2rem' }}>Sign in to access the active slot checker console.</p>
           
           <button 
@@ -741,9 +741,14 @@ export default function App() {
 
       {/* Header */}
       <header className="header">
-        <div className="title-area">
-          <h1>US Visa Slot Alert Center <span style={{ background: 'none', WebkitTextFillColor: 'initial', WebkitBackgroundClip: 'initial', display: 'inline-block' }}>🇮🇳</span></h1>
-          <p>OFC Appointment Monitor (India Scheduling)</p>
+        <div className="title-area" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <div style={{ background: 'var(--primary)', width: '38px', height: '38px', borderRadius: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 12px var(--primary-glow)', flexShrink: 0 }}>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="22" height="22"><path d="M30 20 v10 M70 20 v10 M20 35 h60 M35 60 l10 10 l25-25" stroke="white" stroke-width="9" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+          </div>
+          <div>
+            <h1 style={{ margin: 0, lineHeight: 1.2 }}>US Visa Slot Alert Center</h1>
+            <p style={{ margin: 0 }}>OFC Appointment Monitor (India Scheduling)</p>
+          </div>
         </div>
         
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
