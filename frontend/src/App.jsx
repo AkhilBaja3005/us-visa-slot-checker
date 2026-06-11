@@ -220,17 +220,61 @@ export default function App() {
     prevAvailableSlots.current = { ...status.availableSlots };
   }, [status.availableSlots]);
 
-  const requestNotificationPermission = () => {
-    if ('Notification' in window) {
-      Notification.requestPermission().then(permission => {
+  // Helper to convert base64 VAPID public key to Uint8Array for browser API
+  const urlBase64ToUint8Array = (base64String) => {
+    const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+    const base64 = (base64String + padding).replace(/\-/g, '+').replace(/_/g, '/');
+    const rawData = window.atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) {
+      outputArray[i] = rawData.charCodeAt(i);
+    }
+    return outputArray;
+  };
+
+  const requestNotificationPermission = async () => {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      // Fallback to basic window Notification if push manager not supported (e.g. non-PWA iOS)
+      if ('Notification' in window) {
+        const permission = await Notification.requestPermission();
         if (permission === 'granted') {
-          new Notification("Notifications Enabled!", {
-            body: "You will receive alerts here when visa slots open."
-          });
+          new Notification("Notifications Enabled!", { body: "You will receive real-time alerts." });
         }
+      } else {
+        alert("This browser/context does not support push notifications.");
+      }
+      return;
+    }
+
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') return;
+
+      // Register/get Service Worker
+      const registration = await navigator.serviceWorker.register('/sw.js');
+      console.log('Service Worker registered successfully:', registration);
+
+      // Subscribe to Push Service
+      const subscribeOptions = {
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array('BAeBCAlv578KGZjer8IA9NxERPojjK_GXFw7l3hFYNTwZQLyU3rELcvjZuT5QAFMaT8t9myvxfuw4QPL-K_cJc4')
+      };
+
+      const subscription = await registration.pushManager.subscribe(subscribeOptions);
+      
+      // Save subscription to backend
+      await fetch(`${API_BASE}/push/subscribe`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(subscription)
       });
-    } else {
-      alert("This browser does not support desktop notifications.");
+
+      new Notification("PWA Alerts Activated! 📲", {
+        body: "You're successfully subscribed to background notifications."
+      });
+    } catch (err) {
+      console.error("Failed to enable background push notifications:", err);
+      alert("Failed to activate background notifications. If on iOS, make sure you added the app to your Homescreen first!");
     }
   };
 

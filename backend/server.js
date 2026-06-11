@@ -9,9 +9,41 @@ const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 const ws = require('ws');
 const { chromium } = require('patchright');
+const webPush = require('web-push');
 
 // Cache variable to avoid redundant Supabase updates for slots_detected status
 let cachedSlotsDetected = null;
+
+// Initialize VAPID Keys for iOS/Android Background Push Notifications
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || 'BAeBCAlv578KGZjer8IA9NxERPojjK_GXFw7l3hFYNTwZQLyU3rELcvjZuT5QAFMaT8t9myvxfuw4QPL-K_cJc4';
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || 'QbMh6TUgoV3MAERNO_GhD_d-mfS3sIpcdPjTfY4X9fQ';
+
+webPush.setVapidDetails(
+  'mailto:akhilkumarbaja@gmail.com',
+  VAPID_PUBLIC_KEY,
+  VAPID_PRIVATE_KEY
+);
+
+// Memory storage for push subscriptions
+let pushSubscriptions = [];
+const pushSubscriptionsFilePath = path.join(__dirname, '..', 'push_subscriptions.json');
+
+// Load stored push subscriptions on startup
+try {
+  if (fs.existsSync(pushSubscriptionsFilePath)) {
+    pushSubscriptions = JSON.parse(fs.readFileSync(pushSubscriptionsFilePath, 'utf8'));
+  }
+} catch (e) {
+  console.error("Failed to load push subscriptions:", e);
+}
+
+function savePushSubscriptions() {
+  try {
+    fs.writeFileSync(pushSubscriptionsFilePath, JSON.stringify(pushSubscriptions, null, 2));
+  } catch (e) {
+    console.error("Failed to save push subscriptions:", e);
+  }
+}
 
 // Initialize Supabase if credentials are provided
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -279,6 +311,7 @@ function sendEmail(subject, text, mailConfig) {
 }
 
 function triggerDesktopNotification(title, message) {
+  // 1. Trigger local macOS notification
   const escapedMessage = message.replace(/'/g, "\\'");
   const escapedTitle = title.replace(/'/g, "\\'");
   const cmd = `osascript -e 'display notification "${escapedMessage}" with title "${escapedTitle}" sound name "Glass"'`;
@@ -289,6 +322,22 @@ function triggerDesktopNotification(title, message) {
       logMsg(`[Desktop Alert] Triggered: ${title} -> ${message}`);
     }
   });
+
+  // 2. Broadcast to background mobile PWA devices (iOS/Android)
+  if (pushSubscriptions.length > 0) {
+    const payload = JSON.stringify({ title, body: message });
+    pushSubscriptions.forEach(sub => {
+      webPush.sendNotification(sub, payload)
+        .catch(err => {
+          if (err.statusCode === 410 || err.statusCode === 404) {
+            pushSubscriptions = pushSubscriptions.filter(s => s.endpoint !== sub.endpoint);
+            savePushSubscriptions();
+          }
+          console.error("[WebPush] Auto-alert dispatch failed for endpoint:", sub.endpoint, err.message);
+        });
+    });
+    logMsg(`[WebPush] Dispatched alert background broadcast payload to ${pushSubscriptions.length} registered PWA devices.`);
+  }
 }
 
 // ── Browser Engine Logic (Patchright) ───────────────────────────────────────
@@ -1917,6 +1966,22 @@ app.post('/api/scheduler/toggle', authenticateToken, requireAdmin, (req, res) =>
   }
 });
 
+app.post('/api/push/subscribe', (req, res) => {
+  const subscription = req.body;
+  if (!subscription || !subscription.endpoint) {
+    return res.status(400).json({ error: "Invalid subscription details" });
+  }
+
+  // Avoid duplicates
+  const exists = pushSubscriptions.some(sub => sub.endpoint === subscription.endpoint);
+  if (!exists) {
+    pushSubscriptions.push(subscription);
+    savePushSubscriptions();
+    logMsg(`[WebPush] New background subscription added. Total: ${pushSubscriptions.length}`);
+  }
+  res.status(201).json({ message: "Subscription registered successfully" });
+});
+
 app.post('/api/test-alert', authenticateToken, requireAdmin, async (req, res) => {
   const { channel } = req.body;
   const timeStr = new Date().toLocaleTimeString();
@@ -1929,6 +1994,7 @@ app.post('/api/test-alert', authenticateToken, requireAdmin, async (req, res) =>
     sendTelegram(`🤖 <b>US Visa Monitor Test</b>\n\nThis is a test message confirming your Telegram notification settings are correct!\n🕐 Sent at: ${timeStr}`, config.telegramToken, config.telegramChatId);
     res.json({ message: "Telegram alert sent" });
   } else if (channel === "web-push") {
+    // 1. Broadcast to open browsers via SSE
     const payload = JSON.stringify({
       type: "notification",
       title: "US Visa Monitor Alert Test",
@@ -1941,7 +2007,27 @@ app.post('/api/test-alert', authenticateToken, requireAdmin, async (req, res) =>
         // Ignore disconnected
       }
     });
-    res.json({ message: "Broadcast push notification sent to all active webapp users" });
+
+    // 2. Broadcast to closed devices/background users via Web Push (iOS/Android PWA)
+    const notificationPayload = JSON.stringify({
+      title: "Visa Monitor Test Alert 📲",
+      body: `Background push alerts active! Sent at ${timeStr}`
+    });
+
+    const pushPromises = pushSubscriptions.map(sub => {
+      return webPush.sendNotification(sub, notificationPayload)
+        .catch(err => {
+          if (err.statusCode === 410 || err.statusCode === 404) {
+            // Subscription has expired or is no longer valid, clean it up
+            pushSubscriptions = pushSubscriptions.filter(s => s.endpoint !== sub.endpoint);
+            savePushSubscriptions();
+          }
+          console.error("[WebPush] Failed to send to endpoint:", sub.endpoint, err.message);
+        });
+    });
+
+    await Promise.all(pushPromises);
+    res.json({ message: "Broadcast push notification sent to all active and background webapp users" });
   } else {
     res.status(400).json({ error: "Invalid notification channel requested" });
   }
