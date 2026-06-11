@@ -1984,7 +1984,7 @@ app.post('/api/push/subscribe', (req, res) => {
 
 app.post('/api/test-alert', authenticateToken, requireAdmin, async (req, res) => {
   const { channel } = req.body;
-  const timeStr = new Date().toLocaleTimeString();
+  const timeStr = new Date().toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: true }) + " IST";
   logMsg(`Triggering test alert on channel: ${channel}`);
 
   if (channel === "desktop") {
