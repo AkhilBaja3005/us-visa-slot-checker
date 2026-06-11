@@ -277,8 +277,17 @@ export default function App() {
         eventSource.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data);
-            setStatus(data);
-            setIsOffline(false);
+            if (data.type === 'notification') {
+              if ('Notification' in window && Notification.permission === 'granted') {
+                new Notification(data.title || "US Visa Slot Alert", {
+                  body: data.body || "",
+                  requireInteraction: true
+                });
+              }
+            } else {
+              setStatus(data);
+              setIsOffline(false);
+            }
           } catch (err) {
             console.error("SSE parse error:", err);
           }
@@ -1188,12 +1197,15 @@ export default function App() {
                   Instantly test if your alert configurations are functional by triggering dummy notifications.
                 </p>
                 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.75rem', marginBottom: alertStatus.message ? '0.75rem' : '0' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem', marginBottom: alertStatus.message ? '0.75rem' : '0' }}>
                   <button onClick={() => handleTestAlert('desktop')} disabled={isOffline} className="btn btn-secondary" style={{ fontSize: '0.75rem', padding: '0.6rem 0.1rem' }}>
                     macOS Sound
                   </button>
                   <button onClick={() => handleTestAlert('telegram')} disabled={isOffline || !formConfig.telegramToken} className="btn btn-secondary" style={{ fontSize: '0.75rem', padding: '0.6rem 0.1rem' }}>
                     Telegram Bot
+                  </button>
+                  <button onClick={() => handleTestAlert('web-push')} disabled={isOffline} className="btn btn-secondary" style={{ fontSize: '0.75rem', padding: '0.6rem 0.1rem' }}>
+                    Browser Push
                   </button>
                 </div>
 

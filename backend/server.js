@@ -1928,6 +1928,20 @@ app.post('/api/test-alert', authenticateToken, requireAdmin, async (req, res) =>
   } else if (channel === "telegram") {
     sendTelegram(`🤖 <b>US Visa Monitor Test</b>\n\nThis is a test message confirming your Telegram notification settings are correct!\n🕐 Sent at: ${timeStr}`, config.telegramToken, config.telegramChatId);
     res.json({ message: "Telegram alert sent" });
+  } else if (channel === "web-push") {
+    const payload = JSON.stringify({
+      type: "notification",
+      title: "US Visa Monitor Alert Test",
+      body: `This is a test broadcast push notification!\n🕐 Sent at: ${timeStr}`
+    });
+    sseClients.forEach(client => {
+      try {
+        client.write(`data: ${payload}\n\n`);
+      } catch (e) {
+        // Ignore disconnected
+      }
+    });
+    res.json({ message: "Broadcast push notification sent to all active webapp users" });
   } else {
     res.status(400).json({ error: "Invalid notification channel requested" });
   }
